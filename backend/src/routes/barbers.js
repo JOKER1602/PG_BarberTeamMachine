@@ -6,13 +6,14 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 const router = Router();
 const barberSchema = z.object({
   displayName: z.string().trim().min(2).max(120),
-  bio: z.string().trim().max(2000).optional()
+  bio: z.string().trim().max(2000).optional(),
+  photoUrl: z.string().url().max(2048).nullable().optional()
 });
 
 router.get('/', async (_request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT b.id, b.display_name AS displayName, b.bio,
+      `SELECT b.id, b.display_name AS displayName, b.bio, b.photo_url AS photoUrl,
               GROUP_CONCAT(s.name ORDER BY s.name SEPARATOR ', ') AS services
        FROM barbers b
        LEFT JOIN barber_services bs ON bs.barber_id = b.id
@@ -28,7 +29,7 @@ router.get('/', async (_request, response, next) => {
 router.get('/admin', requireAuth, requireRole('ADMINISTRADOR'), async (_request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT b.id, b.user_id AS userId, b.display_name AS displayName, b.bio, b.is_active AS isActive,
+      `SELECT b.id, b.user_id AS userId, b.display_name AS displayName, b.bio, b.photo_url AS photoUrl, b.is_active AS isActive,
        GROUP_CONCAT(bs.service_id ORDER BY bs.service_id) AS serviceIds
        FROM barbers b LEFT JOIN barber_services bs ON bs.barber_id = b.id
        GROUP BY b.id ORDER BY b.display_name`
@@ -45,8 +46,8 @@ router.post('/', requireAuth, requireRole('ADMINISTRADOR'), async (request, resp
 
   try {
     const [result] = await pool.execute(
-      'INSERT INTO barbers (display_name, bio) VALUES (?, ?)',
-      [parsed.data.displayName, parsed.data.bio ?? null]
+      'INSERT INTO barbers (display_name, bio, photo_url) VALUES (?, ?, ?)',
+      [parsed.data.displayName, parsed.data.bio ?? null, parsed.data.photoUrl ?? null]
     );
     return response.status(201).json({ id: result.insertId, message: 'Barbero creado' });
   } catch (error) {
@@ -58,7 +59,7 @@ router.patch('/:id', requireAuth, requireRole('ADMINISTRADOR'), async (request, 
   const id = z.coerce.number().int().positive().safeParse(request.params.id);
   const parsed = barberSchema.extend({ isActive: z.boolean().optional() }).partial().safeParse(request.body);
   if (!id.success || !parsed.success || Object.keys(parsed.data).length === 0) return response.status(400).json({ message: 'Datos del barbero invalidos' });
-  const fields = { displayName: 'display_name', bio: 'bio', isActive: 'is_active' };
+  const fields = { displayName: 'display_name', bio: 'bio', photoUrl: 'photo_url', isActive: 'is_active' };
   const keys = Object.keys(parsed.data);
   try {
     const [result] = await pool.execute(`UPDATE barbers SET ${keys.map((key) => `${fields[key]} = ?`).join(', ')} WHERE id = ?`, [...keys.map((key) => parsed.data[key]), id.data]);

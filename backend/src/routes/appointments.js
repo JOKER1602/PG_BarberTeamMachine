@@ -4,6 +4,7 @@ import pool from '../config/database.js';
 import { isSlotAvailable } from '../domain/availability.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { barberDayRange, zonedParts } from '../config/time.js';
+import { cancelAppointmentReminders, scheduleAppointmentReminders } from '../services/reminders.js';
 
 const router = Router();
 const bookingSchema = z.object({
@@ -223,7 +224,7 @@ router.get('/mine', async (request, response, next) => {
     const [rows] = await pool.execute(
             `SELECT a.id, a.barber_id AS barberId, a.service_id AS serviceId,
               a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt,
-              s.name AS serviceName, s.price AS price, b.display_name AS barberName
+              s.name AS serviceName, s.price AS price, b.display_name AS barberName, b.photo_url AS barberPhotoUrl
        FROM appointments a
        JOIN services s ON s.id = a.service_id
        JOIN barbers b ON b.id = a.barber_id
@@ -307,6 +308,7 @@ router.patch('/:id/reschedule', async (request, response, next) => {
       `UPDATE appointments SET starts_at = ?, ends_at = ?, status = 'PENDING', updated_by = ? WHERE id = ?`,
       [sqlDateTime(startAt), sqlDateTime(endAt), request.auth.sub, id.data]
     );
+    await cancelAppointmentReminders(connection, id.data);
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
        VALUES (?, ?, 'APPOINTMENT_RESCHEDULED', 'Solicitud reprogramada', 'Tu nueva fecha esta pendiente de confirmacion')`,
@@ -343,6 +345,7 @@ router.patch('/:id/cancel', async (request, response, next) => {
       await connection.rollback();
       return response.status(404).json({ message: 'Cita no encontrada o no cancelable' });
     }
+    await cancelAppointmentReminders(connection, parsed.data);
     const [appointments] = await connection.execute('SELECT client_id FROM appointments WHERE id = ?', [parsed.data]);
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
@@ -374,6 +377,8 @@ router.patch('/:id/status', requireRole('ADMINISTRADOR'), async (request, respon
        WHERE id = ?`,
       [parsed.data.status, parsed.data.status === 'CANCELLED' ? parsed.data.reason ?? null : null, parsed.data.status, parsed.data.status, request.auth.sub, id.data]
     );
+    if (parsed.data.status === 'CONFIRMED') await scheduleAppointmentReminders(connection, id.data);
+    if (['CANCELLED', 'COMPLETED', 'NO_SHOW'].includes(parsed.data.status)) await cancelAppointmentReminders(connection, id.data);
     const messages = { CONFIRMED: ['Cita confirmada', 'Tu cita fue confirmada'], COMPLETED: ['Cita atendida', 'Tu cita fue marcada como atendida'], NO_SHOW: ['Inasistencia registrada', 'Tu cita fue marcada como no asistida'], CANCELLED: ['Cita cancelada', 'Tu cita fue cancelada'] };
     await connection.execute('INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, ?, ?, ?)', [rows[0].client_id, id.data, `APPOINTMENT_${parsed.data.status}`, messages[parsed.data.status][0], messages[parsed.data.status][1]]);
     await connection.commit();

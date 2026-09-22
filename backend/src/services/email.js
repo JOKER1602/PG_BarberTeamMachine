@@ -37,3 +37,17 @@ export async function sendPasswordResetEmail({ to, firstName, resetUrl }) {
     </main>`
   });
 }
+
+export async function sendAppointmentReminderEmail({ to, firstName, appointment, business }) {
+  const config = smtpConfiguration();
+  if (!config) throw new Error('El correo SMTP no está configurado');
+  const transport = nodemailer.createTransport(config);
+  const when = new Date(appointment.startsAt).toLocaleString('es-BO', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/La_Paz' });
+  await transport.sendMail({
+    from: config.from,
+    to,
+    subject: `Recordatorio de cita | ${business.businessName}`,
+    text: `Hola ${firstName}, te recordamos tu cita de ${appointment.serviceName} con ${appointment.barberName} el ${when}. Dirección: ${business.address}, ${business.city}.`,
+    html: `<main style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px;color:#151515"><p style="font-size:12px;letter-spacing:1.5px;color:#3569ee;font-weight:700">${business.businessName}</p><h1 style="font-size:26px">Recordatorio de tu cita</h1><p>Hola ${firstName}, tienes una cita próxima.</p><p><b>${appointment.serviceName}</b><br/>Con ${appointment.barberName}<br/>${when}</p><p style="color:#5e626d">${business.address}, ${business.city} · ${business.phone}</p></main>`
+  });
+}

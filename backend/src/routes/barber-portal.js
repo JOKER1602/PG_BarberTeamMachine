@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import pool from '../config/database.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
+import { cancelAppointmentReminders } from '../services/reminders.js';
 
 const router = Router();
 
@@ -26,6 +27,7 @@ router.patch('/appointments/:id/complete', requireAuth, requireRole('BARBERO'), 
       `UPDATE appointments SET status = 'COMPLETED', completed_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?`,
       [request.auth.sub, appointmentId]
     );
+    await cancelAppointmentReminders(connection, appointmentId);
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
        VALUES (?, ?, 'APPOINTMENT_COMPLETED', 'Cita atendida', 'Tu cita fue marcada como atendida')`,

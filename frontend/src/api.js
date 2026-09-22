@@ -19,6 +19,8 @@ async function request(path, options = {}) {
 
 export const api = {
   health: () => request('/health'),
+  businessSettings: () => request('/settings'),
+  updateBusinessSettings: (body) => request('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
   services: () => request('/services'),
   barbers: () => request('/barbers'),
   barberDashboard: () => request('/barber/dashboard'),

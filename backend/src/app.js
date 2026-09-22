@@ -8,6 +8,7 @@ import barbersRouter from './routes/barbers.js';
 import { handleError, notFound } from './middleware/errors.js';
 import notificationsRouter from './routes/notifications.js';
 import servicesRouter from './routes/services.js';
+import settingsRouter from './routes/settings.js';
 
 const app = express();
 
@@ -18,6 +19,7 @@ app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);
 app.use('/api/barber', barberPortalRouter);
 app.use('/api/services', servicesRouter);
+app.use('/api/settings', settingsRouter);
 app.use('/api/barbers', barbersRouter);
 app.use('/api/appointments', appointmentsRouter);
 app.use('/api/notifications', notificationsRouter);
