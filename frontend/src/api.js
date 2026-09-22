@@ -1,5 +1,17 @@
 const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3002/api';
 
+function expireStoredSession(path, token) {
+  if (!token || path.startsWith('/auth/login') || path.startsWith('/auth/register')) return;
+  clearSession();
+  const currentPath = window.location.pathname;
+  const destination = currentPath === '/admin'
+    ? '/admin?session=expired'
+    : currentPath === '/barbero'
+      ? '/admin?session=expired'
+      : '/reservar/cita?session=expired';
+  window.location.replace(destination);
+}
+
 async function request(path, options = {}) {
   const token = localStorage.getItem('btm_token');
   const response = await fetch(`${API_URL}${path}`, {
@@ -12,6 +24,7 @@ async function request(path, options = {}) {
   });
   const data = response.status === 204 ? null : await response.json();
   if (!response.ok) {
+    if (response.status === 401) expireStoredSession(path, token);
     throw new Error(data?.message ?? 'No se pudo completar la solicitud');
   }
   return data;
@@ -23,7 +36,10 @@ async function upload(path, file) {
   body.append('photo', file);
   const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body });
   const data = await response.json();
-  if (!response.ok) throw new Error(data?.message ?? 'No se pudo subir la imagen');
+  if (!response.ok) {
+    if (response.status === 401) expireStoredSession(path, token);
+    throw new Error(data?.message ?? 'No se pudo subir la imagen');
+  }
   return data;
 }
 
@@ -33,6 +49,8 @@ export const api = {
   reviews: () => request('/reviews'),
   updateBusinessSettings: (body) => request('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
   services: () => request('/services'),
+  serviceCategories: () => request('/services/categories'),
+  createServiceCategory: (body) => request('/services/categories', { method: 'POST', body: JSON.stringify(body) }),
   barbers: () => request('/barbers'),
   barberDashboard: () => request('/barber/dashboard'),
   completeBarberAppointment: (id) => request(`/barber/appointments/${id}/complete`, { method: 'PATCH' }),
