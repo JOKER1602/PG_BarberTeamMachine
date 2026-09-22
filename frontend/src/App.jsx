@@ -301,6 +301,7 @@ function ReservationWizard() {
           })}</div>
           <p className="selected-date">{selection.date && new Date(`${selection.date}T12:00:00`).toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
           <div className="wizard-slots">{slots.length ? slots.map((slot) => <button className={selectedSlot?.startsAt === slot.startsAt ? 'selected' : ''} key={slot.startsAt} onClick={() => setSelectedSlot(slot)}>{new Date(slot.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</button>) : <p className="empty-state">No hay horarios disponibles para este día. Elige otra fecha.</p>}</div>
+          <label className="comment-box pre-auth-note"><span>¿Tienes alguna sugerencia para tu cita? <small>Opcional · no necesitas iniciar sesión todavía.</small></span><textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Por ejemplo: prefiero un corte conservador o una atención puntual."/></label>
         </div>
       </div>
       <aside className="wizard-summary">
@@ -339,7 +340,7 @@ function ReservationWizard() {
         <h2>Más detalles</h2>
         <article className="checkout-card"><b>Política de cancelación</b><p>Cancela gratis en cualquier momento.</p></article>
         <h2>Comentarios o solicitudes</h2>
-        <label className="comment-box"><span>¿Algo que quieras que sepamos?</span><textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Escribe una solicitud opcional para tu barbero."/></label>
+        <label className="comment-box"><span>Tu sugerencia para la cita <small>Se guardará únicamente al confirmar la reserva.</small></span><textarea value={comment} onChange={(event) => setComment(event.target.value)} placeholder="Escribe una solicitud opcional para tu barbero."/></label>
       </div>
       <aside className="checkout-summary">
         <h2>BTM · Cochabamba</h2>
