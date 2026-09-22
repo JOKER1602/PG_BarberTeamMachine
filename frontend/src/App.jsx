@@ -75,6 +75,7 @@ function ReservationWizard() {
   const rescheduleId = reservationParams.get('reschedule');
   const repeatBooking = reservationParams.get('repeat') === '1';
   const sessionExpired = reservationParams.get('session') === 'expired';
+  const directAccountAccess = reservationParams.get('login') === '1';
   const initialBarberId = reservationParams.get('barber') ?? '';
   const initialBookingDate = new Date().toLocaleDateString('en-CA');
   const [services, setServices] = useState([]);
@@ -167,6 +168,10 @@ function ReservationWizard() {
       const result = authMode === 'login' ? await api.login(authForm) : await api.register(authForm);
       saveSession(result);
       setSession(result.user);
+      if (directAccountAccess) {
+        window.location.assign('/mi-cuenta?tab=historial');
+        return;
+      }
       setShowAuthModal(false);
       setPhoneInput(result.user.phone?.replace(/^\+591\s?/, '') ?? '');
       setShowPhoneModal(true);
@@ -718,6 +723,7 @@ function ClientArea() {
   const [selectedAppointmentId, setSelectedAppointmentId] = useState(null);
   const [appointmentToCancel, setAppointmentToCancel] = useState(null);
   const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get('tab') === 'perfil' ? 'perfil' : 'historial');
+  const [historyView, setHistoryView] = useState('programadas');
   const [profile, setProfile] = useState(() => ({ firstName: session?.firstName ?? '', lastName: session?.lastName ?? '', phone: session?.phone?.replace(/^\+591\s?/, '') ?? '' }));
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
@@ -776,8 +782,13 @@ function ClientArea() {
   }
 
   if (!session) return <main className="client-auth-empty"><h1>Inicia sesión para ver tu perfil e historial.</h1><a href="/reservar/cita">Ir a reservas</a></main>;
-  const upcoming = appointments.filter((appointment) => new Date(appointment.startsAt) >= new Date() && !['CANCELLED', 'NO_SHOW'].includes(appointment.status));
-  const selectedAppointment = appointments.find((appointment) => String(appointment.id) === String(selectedAppointmentId)) ?? upcoming[0] ?? appointments[0];
+  const now = new Date();
+  const inProgress = appointments.filter((appointment) => appointment.status === 'CONFIRMED' && new Date(appointment.startsAt) <= now && new Date(appointment.endsAt) > now);
+  const programmed = appointments.filter((appointment) => ['PENDING', 'CONFIRMED'].includes(appointment.status) && new Date(appointment.startsAt) > now);
+  const pastAppointments = appointments.filter((appointment) => !inProgress.some((item) => item.id === appointment.id) && !programmed.some((item) => item.id === appointment.id));
+  const appointmentsByView = { curso: inProgress, programadas: programmed, historial: pastAppointments };
+  const visibleAppointments = appointmentsByView[historyView];
+  const selectedAppointment = visibleAppointments.find((appointment) => String(appointment.id) === String(selectedAppointmentId)) ?? visibleAppointments[0] ?? null;
   const statusLabel = { PENDING: 'Pendiente de confirmación', CONFIRMED: 'Confirmada', COMPLETED: 'Atendida', CANCELLED: 'Cancelada', NO_SHOW: 'No asistió' };
 
   return <main className="client-area">
@@ -788,7 +799,7 @@ function ClientArea() {
         {error && <p className="client-notice error">{error}</p>}{message && <p className="client-notice success">{message}</p>}
         {activeTab === 'perfil' && <ProfileView session={session} profile={profile} setProfile={setProfile} onSave={saveProfile} onChangePassword={changePassword}/>} 
         {activeTab === 'perfil' && <div className="client-profile"><p className="section-label">Perfil</p><h1>Tu información</h1><p>Estos datos se usan para identificar y contactar tu reserva.</p><form onSubmit={saveProfile}><label>Nombre<input required value={profile.firstName} onChange={(event) => setProfile({ ...profile, firstName: event.target.value })}/></label><label>Apellido<input required value={profile.lastName} onChange={(event) => setProfile({ ...profile, lastName: event.target.value })}/></label><label>Correo electrónico<input value={session.email} disabled/></label><label>Número celular<div className="client-phone"><span>+591</span><input inputMode="numeric" maxLength="12" value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value.replace(/[^0-9]/g, '') })}/></div></label><button className="client-primary">Guardar cambios</button></form></div>}
-        {activeTab === 'historial' && <div className="client-history"><p className="section-label">Historial</p><h1>Mis citas</h1><div className="history-filters"><button className="active">Citas</button><button disabled>Beneficios</button><button disabled>Favoritos</button></div><h2>Próximas <span>{upcoming.length}</span></h2>{appointments.length ? <div className="history-grid"><div className="history-list">{appointments.map((appointment) => <button className={selectedAppointment?.id === appointment.id ? 'active' : ''} key={appointment.id} onClick={() => setSelectedAppointmentId(appointment.id)}><b>{appointment.serviceName}</b><span>{new Date(appointment.startsAt).toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} · {new Date(appointment.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</span><small>Con {appointment.barberName}</small></button>)}</div>{selectedAppointment && <AppointmentDetail appointment={selectedAppointment} statusLabel={statusLabel} onCancel={setAppointmentToCancel} onAddToCalendar={addToCalendar} settings={settings}/>}</div> : <div className="history-empty"><b>◷</b><h2>Aún no tienes citas.</h2><p>Cuando confirmes una reserva aparecerá aquí.</p><a href="/reservar">Reservar una cita</a></div>}</div>}
+        {activeTab === 'historial' && <div className="client-history"><p className="section-label">Mi cuenta</p><h1>Mis citas</h1><div className="history-filters"><button className={historyView === 'curso' ? 'active' : ''} onClick={() => setHistoryView('curso')}>En curso <b>{inProgress.length}</b></button><button className={historyView === 'programadas' ? 'active' : ''} onClick={() => setHistoryView('programadas')}>Programadas <b>{programmed.length}</b></button><button className={historyView === 'historial' ? 'active' : ''} onClick={() => setHistoryView('historial')}>Historial <b>{pastAppointments.length}</b></button></div><h2>{historyView === 'curso' ? 'Servicio en curso' : historyView === 'programadas' ? 'Próximas programadas' : 'Citas anteriores'} <span>{visibleAppointments.length}</span></h2>{appointments.length ? visibleAppointments.length ? <div className="history-grid"><div className="history-list">{visibleAppointments.map((appointment) => <button className={selectedAppointment?.id === appointment.id ? 'active' : ''} key={appointment.id} onClick={() => setSelectedAppointmentId(appointment.id)}><b>{appointment.serviceName}</b><span>{new Date(appointment.startsAt).toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} · {new Date(appointment.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</span><small>Con {appointment.barberName} · {statusLabel[appointment.status]}</small></button>)}</div>{selectedAppointment && <AppointmentDetail appointment={selectedAppointment} statusLabel={statusLabel} onCancel={setAppointmentToCancel} onAddToCalendar={addToCalendar} settings={settings}/>}</div> : <div className="history-empty"><b>◷</b><h2>No hay citas en este apartado.</h2><p>{historyView === 'programadas' ? 'Las próximas reservas confirmadas o pendientes aparecerán aquí.' : historyView === 'curso' ? 'Una cita confirmada se mostrará aquí durante su horario.' : 'Tus citas atendidas, canceladas o pasadas aparecerán aquí.'}</p></div> : <div className="history-empty"><b>◷</b><h2>Aún no tienes citas.</h2><p>Cuando confirmes una reserva aparecerá aquí.</p><a href="/reservar">Reservar una cita</a></div>}</div>}
       </section>
     </div>
     {appointmentToCancel && <CancelAppointmentModal appointment={appointmentToCancel} onClose={() => setAppointmentToCancel(null)} onConfirm={() => cancelAppointment(appointmentToCancel)}/>} 
