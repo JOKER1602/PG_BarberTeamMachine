@@ -3,7 +3,7 @@ import { api, clearSession, saveSession } from './api.js';
 
 const weekdays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
-function Landing({ servicesCount, barbersCount, settings, onReserve }) {
+function Landing({ servicesCount, barbersCount, settings, onReserve, session }) {
   const business = settings ?? { businessName: 'Barber Team Machine', address: 'Buenos Aires 130', city: 'Cochabamba', country: 'Bolivia', phone: '77469963', hoursText: 'Lunes a sábado · 10:00 AM — 7:00 PM', mapsUrl: 'https://maps.app.goo.gl/At4qrWe6P2KrDCyW9', description: 'Precisión, técnica y estilo para cada visita.' };
   useEffect(() => {
     const items = document.querySelectorAll('.reveal-on-scroll');
@@ -15,7 +15,7 @@ function Landing({ servicesCount, barbersCount, settings, onReserve }) {
   }, []);
   return <>
     <a className="public-admin-access" href="/admin">Acceso del equipo</a>
-    <nav className="home-nav" aria-label="Navegación principal"><div><a className="brand-mark" href="#inicio">BTM<span>.</span></a><div className="home-nav-links"><a href="#nosotros">Nosotros</a><a href="#servicios">Servicios</a><a href="#ubicacion">Ubicación</a><a href="#reservas">Reservar</a></div></div></nav>
+    <nav className="home-nav" aria-label="Navegación principal"><div><a className="brand-mark" href="#inicio">BTM<span>.</span></a><div className="home-nav-links"><a href="#nosotros">Nosotros</a><a href="#servicios">Servicios</a><a href="#ubicacion">Ubicación</a><a href="#reservas">Reservar</a></div><a className="home-client-access" href={session?.role === 'CLIENTE' ? '/mi-cuenta?tab=historial' : '/reservar/cita?login=1'}>{session?.role === 'CLIENTE' ? 'Mis citas' : 'Iniciar sesión'} <span>↗</span></a></div></nav>
     <section className="landing-hero" id="inicio">
       <div className="hero-copy"><p className="hero-kicker">Barbería · Cochabamba</p><h1>PRECISIÓN<br/>PARA TU<br/><em>MEJOR ESTILO.</em></h1><p>Todo lo que necesitas para salir con una imagen cuidada: corte, barba y cejas, atendidos con técnica y atención al detalle.</p><div className="hero-actions"><button className="hero-cta" onClick={onReserve}>Reserva tu cita <span>↗</span></button><a className="secondary-home-cta" href="#nosotros">Conócenos ↓</a></div></div>
       <div className="hero-side"><div><strong>{servicesCount || '—'}</strong><span>Servicios</span></div><i/><div><strong>{barbersCount || '—'}</strong><span>Barberos</span></div><i/><div><strong>6/7</strong><span>Días abiertos</span></div></div>
@@ -91,7 +91,7 @@ function ReservationWizard() {
   const [notice, setNotice] = useState('');
   const [error, setError] = useState(sessionExpired ? 'Tu sesión expiró. Inicia sesión nuevamente para continuar.' : '');
   const [showProfessionalModal, setShowProfessionalModal] = useState(false);
-  const [showAuthModal, setShowAuthModal] = useState(false);
+  const [showAuthModal, setShowAuthModal] = useState(reservationParams.get('login') === '1');
   const [showPhoneModal, setShowPhoneModal] = useState(false);
   const [phoneInput, setPhoneInput] = useState('');
   const [detailView, setDetailView] = useState('schedule');
@@ -812,7 +812,7 @@ function App() {
   async function loadSlots() { try { setSlots((await api.availability(selection.barberId, selection.serviceId, selection.date)).slots); } catch (e) { setError(e.message); } }
   async function book(slot) { try { if (reschedulingId) { await api.rescheduleAppointment(reschedulingId, slot.startsAt); setReschedulingId(null); setMessage('Reprogramación registrada y pendiente de confirmación.'); } else { await api.createAppointment({ barberId: selection.barberId, serviceId: selection.serviceId, startsAt: slot.startsAt }); setMessage('Solicitud registrada y pendiente de confirmación.'); } setAppointments((await api.appointments()).appointments); setSlots((items) => items.filter((item) => item.startsAt !== slot.startsAt)); } catch (e) { setError(e.message); } }
   const goToBooking = () => window.open('/reservar', '_blank', 'noopener');
-  return <main className="app-shell"><Landing servicesCount={services.length} barbersCount={barbers.length} settings={settings} onReserve={goToBooking}/></main>;
+  return <main className="app-shell"><Landing servicesCount={services.length} barbersCount={barbers.length} settings={settings} onReserve={goToBooking} session={session}/></main>;
 }
 
 export default App;
