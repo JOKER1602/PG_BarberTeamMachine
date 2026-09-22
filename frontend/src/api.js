@@ -17,6 +17,16 @@ async function request(path, options = {}) {
   return data;
 }
 
+async function upload(path, file) {
+  const token = localStorage.getItem('btm_token');
+  const body = new FormData();
+  body.append('photo', file);
+  const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data?.message ?? 'No se pudo subir la imagen');
+  return data;
+}
+
 export const api = {
   health: () => request('/health'),
   businessSettings: () => request('/settings'),
@@ -47,6 +57,7 @@ export const api = {
   updateService: (id, body) => request(`/services/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   adminBarbers: () => request('/barbers/admin'),
   createBarber: (body) => request('/barbers', { method: 'POST', body: JSON.stringify(body) }),
+  uploadBarberPhoto: (id, file) => upload(`/barbers/${id}/photo`, file),
   updateBarber: (id, body) => request(`/barbers/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
   setBarberServices: (id, serviceIds) => request(`/barbers/${id}/services`, { method: 'PUT', body: JSON.stringify({ serviceIds }) }),
   workingHours: (id) => request(`/barbers/${id}/working-hours`),

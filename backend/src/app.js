@@ -1,5 +1,6 @@
 import cors from 'cors';
 import express from 'express';
+import path from 'node:path';
 import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import barberPortalRouter from './routes/barber-portal.js';
@@ -14,6 +15,7 @@ const app = express();
 
 app.use(cors({ origin: process.env.FRONTEND_URL ?? 'http://localhost:5173' }));
 app.use(express.json());
+app.use('/uploads', express.static(path.resolve(process.cwd(), 'uploads')));
 
 app.use('/api/auth', authRouter);
 app.use('/api/admin', adminRouter);

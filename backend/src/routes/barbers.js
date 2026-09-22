@@ -1,13 +1,29 @@
 import { Router } from 'express';
+import { mkdirSync } from 'node:fs';
+import path from 'node:path';
+import { randomUUID } from 'node:crypto';
+import multer from 'multer';
 import { z } from 'zod';
 import pool from '../config/database.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 
 const router = Router();
+const uploadDirectory = path.resolve(process.cwd(), 'uploads', 'barbers');
+mkdirSync(uploadDirectory, { recursive: true });
+const extensionsByMimeType = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
+const photoUpload = multer({
+  storage: multer.diskStorage({ destination: (_request, _file, done) => done(null, uploadDirectory), filename: (_request, file, done) => done(null, `${Date.now()}-${randomUUID()}${extensionsByMimeType[file.mimetype]}`) }),
+  limits: { fileSize: 5 * 1024 * 1024 },
+  fileFilter: (_request, file, done) => {
+    if (extensionsByMimeType[file.mimetype]) return done(null, true);
+    const error = new Error('La foto debe ser JPG, PNG o WEBP');
+    error.status = 400;
+    return done(error);
+  }
+});
 const barberSchema = z.object({
   displayName: z.string().trim().min(2).max(120),
-  bio: z.string().trim().max(2000).optional(),
-  photoUrl: z.string().url().max(2048).nullable().optional()
+  bio: z.string().trim().max(2000).optional()
 });
 
 router.get('/', async (_request, response, next) => {
@@ -46,8 +62,8 @@ router.post('/', requireAuth, requireRole('ADMINISTRADOR'), async (request, resp
 
   try {
     const [result] = await pool.execute(
-      'INSERT INTO barbers (display_name, bio, photo_url) VALUES (?, ?, ?)',
-      [parsed.data.displayName, parsed.data.bio ?? null, parsed.data.photoUrl ?? null]
+      'INSERT INTO barbers (display_name, bio) VALUES (?, ?)',
+      [parsed.data.displayName, parsed.data.bio ?? null]
     );
     return response.status(201).json({ id: result.insertId, message: 'Barbero creado' });
   } catch (error) {
@@ -59,12 +75,24 @@ router.patch('/:id', requireAuth, requireRole('ADMINISTRADOR'), async (request, 
   const id = z.coerce.number().int().positive().safeParse(request.params.id);
   const parsed = barberSchema.extend({ isActive: z.boolean().optional() }).partial().safeParse(request.body);
   if (!id.success || !parsed.success || Object.keys(parsed.data).length === 0) return response.status(400).json({ message: 'Datos del barbero invalidos' });
-  const fields = { displayName: 'display_name', bio: 'bio', photoUrl: 'photo_url', isActive: 'is_active' };
+  const fields = { displayName: 'display_name', bio: 'bio', isActive: 'is_active' };
   const keys = Object.keys(parsed.data);
   try {
     const [result] = await pool.execute(`UPDATE barbers SET ${keys.map((key) => `${fields[key]} = ?`).join(', ')} WHERE id = ?`, [...keys.map((key) => parsed.data[key]), id.data]);
     if (!result.affectedRows) return response.status(404).json({ message: 'Barbero no encontrado' });
     return response.json({ message: 'Barbero actualizado' });
+  } catch (error) { return next(error); }
+});
+
+router.post('/:id/photo', requireAuth, requireRole('ADMINISTRADOR'), photoUpload.single('photo'), async (request, response, next) => {
+  const id = z.coerce.number().int().positive().safeParse(request.params.id);
+  if (!id.success) return response.status(400).json({ message: 'Barbero inválido' });
+  if (!request.file) return response.status(400).json({ message: 'Selecciona una imagen JPG, PNG o WEBP de hasta 5 MB' });
+  try {
+    const photoUrl = `${request.protocol}://${request.get('host')}/uploads/barbers/${request.file.filename}`;
+    const [result] = await pool.execute('UPDATE barbers SET photo_url = ? WHERE id = ?', [photoUrl, id.data]);
+    if (!result.affectedRows) return response.status(404).json({ message: 'Barbero no encontrado' });
+    return response.status(201).json({ photoUrl, message: 'Foto del barbero actualizada' });
   } catch (error) { return next(error); }
 });
 
