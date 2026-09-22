@@ -30,6 +30,7 @@ async function upload(path, file) {
 export const api = {
   health: () => request('/health'),
   businessSettings: () => request('/settings'),
+  reviews: () => request('/reviews'),
   updateBusinessSettings: (body) => request('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
   services: () => request('/services'),
   barbers: () => request('/barbers'),
