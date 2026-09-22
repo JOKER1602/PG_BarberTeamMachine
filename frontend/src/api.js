@@ -22,6 +22,7 @@ export const api = {
   services: () => request('/services'),
   barbers: () => request('/barbers'),
   barberDashboard: () => request('/barber/dashboard'),
+  completeBarberAppointment: (id) => request(`/barber/appointments/${id}/complete`, { method: 'PATCH' }),
   availability: (barberId, serviceIds, date) => request(`/appointments/availability?barberId=${barberId}&serviceIds=${Array.isArray(serviceIds) ? serviceIds.join(',') : serviceIds}&date=${date}`),
   register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
   login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }),

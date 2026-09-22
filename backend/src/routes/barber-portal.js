@@ -4,6 +4,41 @@ import { requireAuth, requireRole } from '../middleware/auth.js';
 
 const router = Router();
 
+router.patch('/appointments/:id/complete', requireAuth, requireRole('BARBERO'), async (request, response, next) => {
+  const appointmentId = Number(request.params.id);
+  if (!Number.isInteger(appointmentId) || appointmentId <= 0) return response.status(400).json({ message: 'Cita inválida' });
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      `SELECT a.id, a.client_id AS clientId
+       FROM appointments a JOIN barbers b ON b.id = a.barber_id
+       WHERE a.id = ? AND b.user_id = ? AND b.is_active = TRUE
+       AND a.status IN ('PENDING', 'CONFIRMED')`,
+      [appointmentId, request.auth.sub]
+    );
+    if (!rows.length) {
+      await connection.rollback();
+      return response.status(404).json({ message: 'Cita no encontrada o no disponible para marcar como atendida' });
+    }
+    await connection.execute(
+      `UPDATE appointments SET status = 'COMPLETED', completed_at = UTC_TIMESTAMP(), updated_by = ? WHERE id = ?`,
+      [request.auth.sub, appointmentId]
+    );
+    await connection.execute(
+      `INSERT INTO notifications (user_id, appointment_id, type, title, message)
+       VALUES (?, ?, 'APPOINTMENT_COMPLETED', 'Cita atendida', 'Tu cita fue marcada como atendida')`,
+      [rows[0].clientId, appointmentId]
+    );
+    await connection.commit();
+    return response.json({ message: 'Cita marcada como atendida', status: 'COMPLETED' });
+  } catch (error) {
+    await connection.rollback();
+    return next(error);
+  } finally { connection.release(); }
+});
+
 router.get('/dashboard', requireAuth, requireRole('BARBERO'), async (request, response, next) => {
   try {
     const [barberRows] = await pool.execute(

@@ -144,8 +144,8 @@ router.post('/multi', async (request, response, next) => {
     for (const service of finalAvailability.services) {
       const serviceEnd = new Date(serviceStart.getTime() + service.durationMinutes * 60_000);
       const [created] = await connection.execute(
-        `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status) VALUES (?, ?, ?, ?, ?, 'PENDING')`,
-        [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd)]
+        `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, updated_by) VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`,
+        [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), request.auth.sub]
       );
       ids.push(created.insertId);
       serviceStart = serviceEnd;
@@ -198,9 +198,9 @@ router.post('/', async (request, response, next) => {
     }
 
     const [appointmentResult] = await connection.execute(
-      `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status)
-       VALUES (?, ?, ?, ?, ?, 'PENDING')`,
-      [request.auth.sub, barberId, serviceId, sqlDateTime(startAt), sqlDateTime(endAt)]
+      `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, updated_by)
+       VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`,
+      [request.auth.sub, barberId, serviceId, sqlDateTime(startAt), sqlDateTime(endAt), request.auth.sub]
     );
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
@@ -222,7 +222,7 @@ router.get('/mine', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
             `SELECT a.id, a.barber_id AS barberId, a.service_id AS serviceId,
-              a.starts_at AS startsAt, a.ends_at AS endsAt, a.status,
+              a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt,
               s.name AS serviceName, s.price AS price, b.display_name AS barberName
        FROM appointments a
        JOIN services s ON s.id = a.service_id
@@ -253,6 +253,7 @@ router.get('/admin', requireRole('ADMINISTRADOR'), async (request, response, nex
     const [rows] = await pool.execute(
       `SELECT a.id, a.client_id AS clientId, a.barber_id AS barberId, a.service_id AS serviceId,
        a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancellation_reason AS cancellationReason,
+       a.cancelled_at AS cancelledAt, a.completed_at AS completedAt, a.updated_by AS updatedBy,
        s.name AS serviceName, b.display_name AS barberName,
        CONCAT(u.first_name, ' ', u.last_name) AS clientName
        FROM appointments a JOIN services s ON s.id = a.service_id JOIN barbers b ON b.id = a.barber_id
@@ -303,8 +304,8 @@ router.patch('/:id/reschedule', async (request, response, next) => {
     }
 
     await connection.execute(
-      `UPDATE appointments SET starts_at = ?, ends_at = ?, status = 'PENDING' WHERE id = ?`,
-      [sqlDateTime(startAt), sqlDateTime(endAt), id.data]
+      `UPDATE appointments SET starts_at = ?, ends_at = ?, status = 'PENDING', updated_by = ? WHERE id = ?`,
+      [sqlDateTime(startAt), sqlDateTime(endAt), request.auth.sub, id.data]
     );
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
@@ -334,9 +335,9 @@ router.patch('/:id/cancel', async (request, response, next) => {
   try {
     await connection.beginTransaction();
     const [result] = await connection.execute(
-      `UPDATE appointments SET status = 'CANCELLED', cancellation_reason = ?
+      `UPDATE appointments SET status = 'CANCELLED', cancellation_reason = ?, cancelled_at = UTC_TIMESTAMP(), updated_by = ?
        WHERE id = ? AND (client_id = ? OR ? = 'ADMINISTRADOR') AND status IN ('PENDING', 'CONFIRMED')`,
-      [body.data.reason ?? null, parsed.data, request.auth.sub, request.auth.role]
+      [body.data.reason ?? null, request.auth.sub, parsed.data, request.auth.sub, request.auth.role]
     );
     if (result.affectedRows === 0) {
       await connection.rollback();
@@ -364,7 +365,15 @@ router.patch('/:id/status', requireRole('ADMINISTRADOR'), async (request, respon
     await connection.beginTransaction();
     const [rows] = await connection.execute("SELECT client_id FROM appointments WHERE id = ? AND status IN ('PENDING', 'CONFIRMED')", [id.data]);
     if (!rows.length) { await connection.rollback(); return response.status(404).json({ message: 'Cita no encontrada o no actualizable' }); }
-    await connection.execute('UPDATE appointments SET status = ?, cancellation_reason = ? WHERE id = ?', [parsed.data.status, parsed.data.status === 'CANCELLED' ? parsed.data.reason ?? null : null, id.data]);
+    await connection.execute(
+      `UPDATE appointments
+       SET status = ?, cancellation_reason = ?,
+           cancelled_at = CASE WHEN ? = 'CANCELLED' THEN UTC_TIMESTAMP() ELSE cancelled_at END,
+           completed_at = CASE WHEN ? = 'COMPLETED' THEN UTC_TIMESTAMP() ELSE completed_at END,
+           updated_by = ?
+       WHERE id = ?`,
+      [parsed.data.status, parsed.data.status === 'CANCELLED' ? parsed.data.reason ?? null : null, parsed.data.status, parsed.data.status, request.auth.sub, id.data]
+    );
     const messages = { CONFIRMED: ['Cita confirmada', 'Tu cita fue confirmada'], COMPLETED: ['Cita atendida', 'Tu cita fue marcada como atendida'], NO_SHOW: ['Inasistencia registrada', 'Tu cita fue marcada como no asistida'], CANCELLED: ['Cita cancelada', 'Tu cita fue cancelada'] };
     await connection.execute('INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, ?, ?, ?)', [rows[0].client_id, id.data, `APPOINTMENT_${parsed.data.status}`, messages[parsed.data.status][0], messages[parsed.data.status][1]]);
     await connection.commit();
