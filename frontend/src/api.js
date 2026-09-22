@@ -35,6 +35,7 @@ export const api = {
   notifications: () => request('/notifications'),
   markNotificationRead: (id) => request(`/notifications/${id}/read`, { method: 'PATCH' }),
   updateProfile: (body) => request('/auth/me', { method: 'PATCH', body: JSON.stringify(body) }),
+  updatePassword: (body) => request('/auth/me/password', { method: 'PATCH', body: JSON.stringify(body) }),
   adminAppointments: (query = '') => request(`/appointments/admin${query ? `?${query}` : ''}`),
   updateAppointmentStatus: (id, body) => request(`/appointments/${id}/status`, { method: 'PATCH', body: JSON.stringify(body) }),
   adminServices: () => request('/services/admin'),

@@ -631,8 +631,28 @@ function CancelAppointmentModal({ appointment, onClose, onConfirm }) {
   </div>;
 }
 
-function ProfileView({ session, profile, setProfile, onSave }) {
+function ChangePasswordModal({ onClose, onSave }) {
+  const [form, setForm] = useState({ currentPassword: '', password: '', confirmation: '' });
+  const [error, setError] = useState('');
+  const [saving, setSaving] = useState(false);
+  async function submit(event) {
+    event.preventDefault(); setError('');
+    if (form.password !== form.confirmation) { setError('Las contraseñas nuevas no coinciden.'); return; }
+    setSaving(true);
+    try { await onSave({ currentPassword: form.currentPassword, password: form.password }); onClose(); }
+    catch (requestError) { setError(requestError.message); }
+    finally { setSaving(false); }
+  }
+  return <div className="password-change-backdrop" role="dialog" aria-modal="true" aria-label="Cambiar contraseña"><section className="password-change-modal">
+    <button className="modal-close" onClick={onClose} aria-label="Cerrar">×</button>
+    <p className="section-label">Seguridad</p><h2>Cambiar contraseña</h2><p>Para proteger tu cuenta, confirma tu contraseña actual antes de guardar una nueva.</p>
+    <form onSubmit={submit}><label>Contraseña actual<input type="password" required minLength="8" autoComplete="current-password" value={form.currentPassword} onChange={(event) => setForm({ ...form, currentPassword: event.target.value })}/></label><label>Nueva contraseña<input type="password" required minLength="8" autoComplete="new-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })}/></label><label>Confirmar nueva contraseña<input type="password" required minLength="8" autoComplete="new-password" value={form.confirmation} onChange={(event) => setForm({ ...form, confirmation: event.target.value })}/></label>{error && <p className="password-change-error">{error}</p>}<button className="client-primary" disabled={saving}>{saving ? 'Guardando...' : 'Actualizar contraseña'}</button></form>
+  </section></div>;
+}
+
+function ProfileView({ session, profile, setProfile, onSave, onChangePassword }) {
   const [editing, setEditing] = useState(false);
+  const [showPasswordModal, setShowPasswordModal] = useState(false);
   async function submit(event) {
     if (await onSave(event)) setEditing(false);
   }
@@ -654,8 +674,10 @@ function ProfileView({ session, profile, setProfile, onSave }) {
       </form> : <>
         <section className="profile-phone-card"><b>Teléfono de contacto</b><p>{profile.phone ? `+591 ${profile.phone}` : 'Aún no registraste un número.'}</p><span>{profile.phone ? 'Usaremos este número para comunicarnos sobre tu cita.' : 'Añádelo desde Editar para recibir avisos.'}</span></section>
         <dl className="profile-details"><div><dt>Nombre</dt><dd>{session.firstName}</dd></div><div><dt>Apellido</dt><dd>{session.lastName}</dd></div><div><dt>Número de teléfono</dt><dd>{profile.phone ? `+591 ${profile.phone}` : 'No registrado'}</dd></div><div><dt>Correo electrónico</dt><dd>{session.email}</dd></div></dl>
+        <button className="profile-password-button" onClick={() => setShowPasswordModal(true)}>⌑ &nbsp; Cambiar contraseña</button>
       </>}
     </article>
+    {showPasswordModal && <ChangePasswordModal onClose={() => setShowPasswordModal(false)} onSave={onChangePassword}/>} 
   </section>;
 }
 
@@ -693,6 +715,11 @@ function ClientArea() {
     }
   }
 
+  async function changePassword(data) {
+    const result = await api.updatePassword(data);
+    setMessage(result.message);
+  }
+
   async function cancelAppointment(appointment) {
     try {
       await api.cancelAppointment(appointment.id);
@@ -726,7 +753,7 @@ function ClientArea() {
       <aside className="client-menu"><p>MI CUENTA</p><strong>{session.firstName} {session.lastName}</strong><button className={activeTab === 'perfil' ? 'active' : ''} onClick={() => changeTab('perfil')}>◉ &nbsp; Perfil</button><button className={activeTab === 'historial' ? 'active' : ''} onClick={() => changeTab('historial')}>◷ &nbsp; Historial</button></aside>
       <section className="client-content">
         {error && <p className="client-notice error">{error}</p>}{message && <p className="client-notice success">{message}</p>}
-        {activeTab === 'perfil' && <ProfileView session={session} profile={profile} setProfile={setProfile} onSave={saveProfile}/>} 
+        {activeTab === 'perfil' && <ProfileView session={session} profile={profile} setProfile={setProfile} onSave={saveProfile} onChangePassword={changePassword}/>} 
         {activeTab === 'perfil' && <div className="client-profile"><p className="section-label">Perfil</p><h1>Tu información</h1><p>Estos datos se usan para identificar y contactar tu reserva.</p><form onSubmit={saveProfile}><label>Nombre<input required value={profile.firstName} onChange={(event) => setProfile({ ...profile, firstName: event.target.value })}/></label><label>Apellido<input required value={profile.lastName} onChange={(event) => setProfile({ ...profile, lastName: event.target.value })}/></label><label>Correo electrónico<input value={session.email} disabled/></label><label>Número celular<div className="client-phone"><span>+591</span><input inputMode="numeric" maxLength="12" value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value.replace(/[^0-9]/g, '') })}/></div></label><button className="client-primary">Guardar cambios</button></form></div>}
         {activeTab === 'historial' && <div className="client-history"><p className="section-label">Historial</p><h1>Mis citas</h1><div className="history-filters"><button className="active">Citas</button><button disabled>Beneficios</button><button disabled>Favoritos</button></div><h2>Próximas <span>{upcoming.length}</span></h2>{appointments.length ? <div className="history-grid"><div className="history-list">{appointments.map((appointment) => <button className={selectedAppointment?.id === appointment.id ? 'active' : ''} key={appointment.id} onClick={() => setSelectedAppointmentId(appointment.id)}><b>{appointment.serviceName}</b><span>{new Date(appointment.startsAt).toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} · {new Date(appointment.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</span><small>Con {appointment.barberName}</small></button>)}</div>{selectedAppointment && <AppointmentDetail appointment={selectedAppointment} statusLabel={statusLabel} onCancel={setAppointmentToCancel} onAddToCalendar={addToCalendar}/>}</div> : <div className="history-empty"><b>◷</b><h2>Aún no tienes citas.</h2><p>Cuando confirmes una reserva aparecerá aquí.</p><a href="/reservar">Reservar una cita</a></div>}</div>}
       </section>
