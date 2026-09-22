@@ -40,6 +40,7 @@ export const api = {
   updateProfile: (body) => request('/auth/me', { method: 'PATCH', body: JSON.stringify(body) }),
   updatePassword: (body) => request('/auth/me/password', { method: 'PATCH', body: JSON.stringify(body) }),
   adminAppointments: (query = '') => request(`/appointments/admin${query ? `?${query}` : ''}`),
+  updateAppointmentAdminNotes: (id, adminNotes) => request(`/appointments/${id}/admin-notes`, { method: 'PATCH', body: JSON.stringify({ adminNotes }) }),
   updateAppointmentStatus: (id, body) => request(`/appointments/${id}/status`, { method: 'PATCH', body: JSON.stringify(body) }),
   adminServices: () => request('/services/admin'),
   createService: (body) => request('/services', { method: 'POST', body: JSON.stringify(body) }),

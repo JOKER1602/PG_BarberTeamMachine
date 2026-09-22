@@ -103,6 +103,8 @@ CREATE TABLE appointments (
   ends_at DATETIME NOT NULL,
   status ENUM('PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED', 'NO_SHOW') NOT NULL DEFAULT 'PENDING',
   cancellation_reason VARCHAR(255),
+  client_notes TEXT NULL,
+  admin_notes TEXT NULL,
   cancelled_at DATETIME NULL,
   completed_at DATETIME NULL,
   updated_by BIGINT UNSIGNED NULL,

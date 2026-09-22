@@ -52,7 +52,7 @@ router.get('/dashboard', requireAuth, requireRole('BARBERO'), async (request, re
 
     const barber = barberRows[0];
     const [appointments] = await pool.execute(
-      `SELECT a.id, a.starts_at AS startsAt, a.ends_at AS endsAt, a.status,
+      `SELECT a.id, a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.client_notes AS clientNotes, a.admin_notes AS adminNotes,
               s.name AS serviceName, s.duration_minutes AS durationMinutes,
               CONCAT(u.first_name, ' ', u.last_name) AS clientName, u.phone AS clientPhone
        FROM appointments a
