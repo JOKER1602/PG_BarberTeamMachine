@@ -218,10 +218,11 @@ function ReservationWizard() {
     }
   }
 
-  async function getSlots() {
+  async function getSlots({ preserveSelection = false } = {}) {
     try {
-      setSelectedSlot(null);
-      setSlots((await api.availability(selection.barberId, selectedServiceIds, selection.date)).slots);
+      const nextSlots = (await api.availability(selection.barberId, selectedServiceIds, selection.date)).slots;
+      setSlots(nextSlots);
+      setSelectedSlot((current) => preserveSelection && current && nextSlots.some((slot) => slot.startsAt === current.startsAt) ? current : null);
     } catch (availabilityError) {
       setError(availabilityError.message);
     }
@@ -261,6 +262,14 @@ function ReservationWizard() {
 
   useEffect(() => {
     if (step === 2 && selection.barberId && selection.date && selectedServiceIds.length) getSlots();
+  }, [step, selection.barberId, selection.date, selectedServiceIds.join(',')]);
+
+  useEffect(() => {
+    if (step !== 2 || !selection.barberId || !selection.date || !selectedServiceIds.length) return undefined;
+    const refreshAvailability = () => getSlots({ preserveSelection: true });
+    const timer = window.setInterval(refreshAvailability, 15000);
+    window.addEventListener('focus', refreshAvailability);
+    return () => { window.clearInterval(timer); window.removeEventListener('focus', refreshAvailability); };
   }, [step, selection.barberId, selection.date, selectedServiceIds.join(',')]);
 
   return <main className="reservation-wizard">

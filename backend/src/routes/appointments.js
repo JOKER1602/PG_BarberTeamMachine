@@ -30,6 +30,11 @@ function sqlDateTime(date) {
   return date.toISOString().slice(0, 19).replace('T', ' ');
 }
 
+async function acquireBarberLock(connection, barberId) {
+  const [rows] = await connection.execute('SELECT GET_LOCK(?, 10) AS acquired', [`barber-team-machine-barber-${barberId}`]);
+  return Number(rows[0]?.acquired) === 1;
+}
+
 async function loadAvailability(connection, barberId, serviceId, startAt, endAt) {
   const weekday = zonedParts(startAt).weekday;
   const [serviceRows] = await connection.execute(
@@ -127,7 +132,10 @@ router.post('/multi', async (request, response, next) => {
     const serviceIds = [...new Set(parsed.data.serviceIds)];
     const startAt = new Date(startsAt);
     await connection.beginTransaction();
-    await connection.execute('SELECT GET_LOCK(?, 10)', [`barber-team-machine-barber-${barberId}`]);
+    if (!await acquireBarberLock(connection, barberId)) {
+      await connection.rollback();
+      return response.status(409).json({ message: 'La disponibilidad se está actualizando. Intenta nuevamente.' });
+    }
     const optimisticEndAt = new Date(startAt.getTime() + 24 * 60 * 60_000);
     const availability = await loadMultiAvailability(connection, barberId, serviceIds, startAt, optimisticEndAt);
     if (!availability.services) {
@@ -179,7 +187,10 @@ router.post('/', async (request, response, next) => {
     const { barberId, serviceId, startsAt } = parsed.data;
     const startAt = new Date(startsAt);
     await connection.beginTransaction();
-    await connection.execute('SELECT GET_LOCK(?, 10)', [`barber-team-machine-barber-${barberId}`]);
+    if (!await acquireBarberLock(connection, barberId)) {
+      await connection.rollback();
+      return response.status(409).json({ message: 'La disponibilidad se está actualizando. Intenta nuevamente.' });
+    }
 
     const [serviceRows] = await connection.execute(
       `SELECT s.id, s.duration_minutes AS durationMinutes
@@ -291,7 +302,10 @@ router.patch('/:id/reschedule', async (request, response, next) => {
     }
 
     ({ barberId } = appointmentRows[0]);
-    await connection.execute('SELECT GET_LOCK(?, 10)', [`barber-team-machine-barber-${barberId}`]);
+    if (!await acquireBarberLock(connection, barberId)) {
+      await connection.rollback();
+      return response.status(409).json({ message: 'La disponibilidad se está actualizando. Intenta nuevamente.' });
+    }
     const startAt = new Date(body.data.startsAt);
     const [serviceRows] = await connection.execute('SELECT duration_minutes AS durationMinutes FROM services WHERE id = ?', [appointmentRows[0].serviceId]);
     const endAt = new Date(startAt.getTime() + serviceRows[0].durationMinutes * 60_000);

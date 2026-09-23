@@ -14,7 +14,10 @@ export function isWithinWorkingHours(startAt, endAt, workingHours) {
   ));
 }
 
-export function isSlotAvailable({ startAt, endAt, workingHours, blocks, appointments }) {
+export function isSlotAvailable({ startAt, endAt, workingHours, blocks, appointments, now = new Date() }) {
+  if (new Date(startAt) <= new Date(now)) {
+    return { available: false, reason: 'No se puede reservar un horario que ya pasó' };
+  }
   if (!isWithinWorkingHours(startAt, endAt, workingHours)) {
     return { available: false, reason: 'Fuera del horario laboral' };
   }

@@ -16,7 +16,7 @@ test('rejects appointments that overlap even partially', () => {
   assert.equal(overlaps(at('15:00'), at('15:45'), at('15:45'), at('16:15')), false);
   const result = isSlotAvailable({
     startAt: at('15:30'), endAt: at('16:15'), workingHours: mondayHours, blocks: [],
-    appointments: [{ starts_at: at('15:00'), ends_at: at('15:45') }]
+    appointments: [{ starts_at: at('15:00'), ends_at: at('15:45') }], now: at('08:00')
   });
   assert.deepEqual(result, { available: false, reason: 'El horario ya esta ocupado' });
 });
@@ -24,9 +24,14 @@ test('rejects appointments that overlap even partially', () => {
 test('rejects schedule blocks and services that cross closing time', () => {
   const blocked = isSlotAvailable({
     startAt: at('12:00'), endAt: at('12:30'), workingHours: mondayHours,
-    blocks: [{ starts_at: at('11:45'), ends_at: at('12:15') }], appointments: []
+    blocks: [{ starts_at: at('11:45'), ends_at: at('12:15') }], appointments: [], now: at('08:00')
   });
   assert.deepEqual(blocked, { available: false, reason: 'Horario bloqueado' });
-  const closing = isSlotAvailable({ startAt: at('17:30'), endAt: at('18:30'), workingHours: mondayHours, blocks: [], appointments: [] });
+  const closing = isSlotAvailable({ startAt: at('17:30'), endAt: at('18:30'), workingHours: mondayHours, blocks: [], appointments: [], now: at('08:00') });
   assert.deepEqual(closing, { available: false, reason: 'Fuera del horario laboral' });
+});
+
+test('rejects slots that have already passed today', () => {
+  const result = isSlotAvailable({ startAt: at('10:00'), endAt: at('10:30'), workingHours: mondayHours, blocks: [], appointments: [], now: at('16:00') });
+  assert.deepEqual(result, { available: false, reason: 'No se puede reservar un horario que ya pasó' });
 });
