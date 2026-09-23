@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import pool from '../config/database.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { cancelAppointmentReminders } from '../services/reminders.js';
@@ -35,6 +36,63 @@ router.patch('/appointments/:id/complete', requireAuth, requireRole('BARBERO'), 
     );
     await connection.commit();
     return response.json({ message: 'Cita marcada como atendida', status: 'COMPLETED' });
+  } catch (error) {
+    await connection.rollback();
+    return next(error);
+  } finally { connection.release(); }
+});
+
+router.patch('/appointments/:id/status', requireAuth, requireRole('BARBERO'), async (request, response, next) => {
+  const id = z.coerce.number().int().positive().safeParse(request.params.id);
+  const body = z.object({
+    status: z.enum(['NO_SHOW', 'CANCELLED']),
+    reason: z.string().trim().max(255).optional()
+  }).safeParse(request.body);
+  if (!id.success || !body.success) return response.status(400).json({ message: 'Actualización de cita inválida' });
+
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      `SELECT a.id, a.client_id AS clientId
+       FROM appointments a JOIN barbers b ON b.id = a.barber_id
+       WHERE a.id = ? AND b.user_id = ? AND b.is_active = TRUE
+       AND a.status IN ('PENDING', 'CONFIRMED')
+       FOR UPDATE`,
+      [id.data, request.auth.sub]
+    );
+    if (!rows.length) {
+      await connection.rollback();
+      return response.status(404).json({ message: 'Cita no encontrada o no disponible para actualizar' });
+    }
+
+    const isCancellation = body.data.status === 'CANCELLED';
+    await connection.execute(
+      `UPDATE appointments
+       SET status = ?,
+           cancellation_reason = CASE WHEN ? THEN ? ELSE cancellation_reason END,
+           cancelled_at = CASE WHEN ? THEN UTC_TIMESTAMP() ELSE cancelled_at END,
+           updated_by = ?
+       WHERE id = ?`,
+      [body.data.status, isCancellation, body.data.reason ?? null, isCancellation, request.auth.sub, id.data]
+    );
+    await cancelAppointmentReminders(connection, id.data);
+    await connection.execute(
+      `INSERT INTO notifications (user_id, appointment_id, type, title, message)
+       VALUES (?, ?, ?, ?, ?)`,
+      [
+        rows[0].clientId,
+        id.data,
+        isCancellation ? 'APPOINTMENT_CANCELLED' : 'APPOINTMENT_NO_SHOW',
+        isCancellation ? 'Cita cancelada' : 'Cita no asistida',
+        isCancellation ? 'Tu cita fue cancelada por el profesional.' : 'El profesional registró que no asististe a tu cita.'
+      ]
+    );
+    await connection.commit();
+    return response.json({
+      message: isCancellation ? 'Cita cancelada correctamente' : 'Cita marcada como no asistida',
+      status: body.data.status
+    });
   } catch (error) {
     await connection.rollback();
     return next(error);

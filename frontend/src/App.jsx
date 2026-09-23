@@ -597,10 +597,34 @@ function AdminPortal() {
   </main>;
 }
 
+function BarberStatusModal({ change, onClose, onConfirm }) {
+  const isCancellation = change.status === 'CANCELLED';
+  return <div className="barber-status-backdrop" role="dialog" aria-modal="true" aria-labelledby="barber-status-title">
+    <section className="barber-status-modal">
+      <button className="barber-status-close" onClick={onClose} aria-label="Cerrar">×</button>
+      <p className="section-label">Actualizar cita</p>
+      <h2 id="barber-status-title">{isCancellation ? '¿Cancelar esta cita?' : '¿Marcar como no asistió?'}</h2>
+      <p>La cita de <b>{change.appointment.clientName}</b> quedará registrada como {isCancellation ? 'cancelada' : 'no asistida'} y se notificará al cliente.</p>
+      {isCancellation && <label>Motivo de cancelación <small>Opcional</small><textarea value={change.reason} maxLength="255" placeholder="Ej.: inconveniente de horario" onChange={(event) => change.setReason(event.target.value)}/></label>}
+      <div className="barber-status-modal-actions"><button onClick={onClose}>Volver</button><button className={isCancellation ? 'cancel' : 'no-show'} onClick={onConfirm}>{isCancellation ? 'Sí, cancelar' : 'Confirmar no asistió'}</button></div>
+    </section>
+  </div>;
+}
+
+function BarberAppointmentActions({ appointment, onComplete, onRequestStatus }) {
+  if (!['PENDING', 'CONFIRMED'].includes(appointment.status)) return null;
+  return <div className="barber-appointment-actions">
+    <button className="barber-complete" onClick={() => onComplete(appointment.id)}>Atendida</button>
+    <button className="barber-no-show" onClick={() => onRequestStatus(appointment, 'NO_SHOW')}>No asistió</button>
+    <button className="barber-cancel" onClick={() => onRequestStatus(appointment, 'CANCELLED')}>Cancelar</button>
+  </div>;
+}
+
 function BarberPortal() {
   const [session, setSession] = useState(() => JSON.parse(localStorage.getItem('btm_user') ?? 'null'));
   const [dashboard, setDashboard] = useState(null);
   const [error, setError] = useState('');
+  const [statusChange, setStatusChange] = useState(null);
   const isBarber = session?.role === 'BARBERO';
 
   useEffect(() => {
@@ -617,11 +641,24 @@ function BarberPortal() {
   const now = new Date();
   const today = appointments.filter((appointment) => new Date(appointment.startsAt).toDateString() === now.toDateString());
   const upcoming = appointments.filter((appointment) => new Date(appointment.startsAt) >= now && !['CANCELLED', 'NO_SHOW'].includes(appointment.status));
+  async function refreshDashboard() { setDashboard(await api.barberDashboard()); }
   async function markAsCompleted(id) {
-    try { await api.completeBarberAppointment(id); setDashboard(await api.barberDashboard()); }
+    try { setError(''); await api.completeBarberAppointment(id); await refreshDashboard(); }
     catch (requestError) { setError(requestError.message); }
   }
-  return <main className="barber-portal"><header><a href="/">BTM<span>.</span></a><div><span>{dashboard?.barber.displayName}</span><button onClick={() => { clearSession(); setSession(null); }}>Cerrar sesión</button></div></header><section className="barber-hero"><p className="section-label">Mi agenda</p><h1>Hola, {dashboard?.barber.displayName?.split(' ')[0]}.</h1><p>Estas son exclusivamente las citas asignadas a ti.</p><div><article><b>{today.length}</b><span>Citas de hoy</span></article><article><b>{upcoming.length}</b><span>Próximas citas</span></article><article><b>{dashboard?.services.length ?? 0}</b><span>Servicios asignados</span></article></div></section>{error && <p className="barber-error">{error}</p>}<section className="barber-dashboard"><div><h2>Agenda de hoy</h2>{today.length ? <div className="barber-appointments">{today.map((appointment) => <article key={appointment.id}><time>{new Date(appointment.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</time><div><b>{appointment.clientName}</b><span>{appointment.serviceName} · {appointment.durationMinutes} min</span>{appointment.clientNotes && <p className="barber-appointment-note"><b>Solicitud:</b> {appointment.clientNotes}</p>}{appointment.adminNotes && <p className="barber-appointment-note internal"><b>Nota del equipo:</b> {appointment.adminNotes}</p>}</div><i className={appointment.status.toLowerCase()}>{appointment.status}</i>{['PENDING', 'CONFIRMED'].includes(appointment.status) && <button className="barber-complete" onClick={() => markAsCompleted(appointment.id)}>Marcar atendida</button>}</article>)}</div> : <p className="barber-empty">No tienes citas para hoy.</p>}</div><aside><h2>Mi información</h2><b>Servicios</b><p>{dashboard?.services.map((service) => service.name).join(' · ') || 'Sin servicios asignados'}</p><b>Horario laboral</b><p>{dashboard?.workingHours.length ? 'Configurado por administración' : 'Sin horario configurado'}</p></aside></section><section className="barber-upcoming"><h2>Próximas citas</h2>{upcoming.length ? upcoming.map((appointment) => <article key={appointment.id}><div><b>{appointment.serviceName}</b><span>{appointment.clientName}</span>{appointment.clientNotes && <p className="barber-appointment-note"><b>Solicitud:</b> {appointment.clientNotes}</p>}{appointment.adminNotes && <p className="barber-appointment-note internal"><b>Nota del equipo:</b> {appointment.adminNotes}</p>}</div><time>{new Date(appointment.startsAt).toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short' })} · {new Date(appointment.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</time><i>{appointment.status}</i>{['PENDING', 'CONFIRMED'].includes(appointment.status) && <button className="barber-complete" onClick={() => markAsCompleted(appointment.id)}>Atendida</button>}</article>) : <p className="barber-empty">No tienes próximas citas.</p>}</section></main>;
+  function requestStatusChange(appointment, status) {
+    setStatusChange({ appointment, status, reason: '' });
+  }
+  async function confirmStatusChange() {
+    if (!statusChange) return;
+    try {
+      setError('');
+      await api.updateBarberAppointmentStatus(statusChange.appointment.id, { status: statusChange.status, reason: statusChange.reason || undefined });
+      setStatusChange(null);
+      await refreshDashboard();
+    } catch (requestError) { setError(requestError.message); }
+  }
+  return <main className="barber-portal"><header><a href="/">BTM<span>.</span></a><div><span>{dashboard?.barber.displayName}</span><button onClick={() => { clearSession(); setSession(null); }}>Cerrar sesión</button></div></header><section className="barber-hero"><p className="section-label">Mi agenda</p><h1>Hola, {dashboard?.barber.displayName?.split(' ')[0]}.</h1><p>Estas son exclusivamente las citas asignadas a ti.</p><div><article><b>{today.length}</b><span>Citas de hoy</span></article><article><b>{upcoming.length}</b><span>Próximas citas</span></article><article><b>{dashboard?.services.length ?? 0}</b><span>Servicios asignados</span></article></div></section>{error && <p className="barber-error">{error}</p>}<section className="barber-dashboard"><div><h2>Agenda de hoy</h2>{today.length ? <div className="barber-appointments">{today.map((appointment) => <article key={appointment.id}><time>{new Date(appointment.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</time><div><b>{appointment.clientName}</b><span>{appointment.serviceName} · {appointment.durationMinutes} min</span>{appointment.clientNotes && <p className="barber-appointment-note"><b>Solicitud:</b> {appointment.clientNotes}</p>}{appointment.adminNotes && <p className="barber-appointment-note internal"><b>Nota del equipo:</b> {appointment.adminNotes}</p>}</div><i className={appointment.status.toLowerCase()}>{appointment.status}</i><BarberAppointmentActions appointment={appointment} onComplete={markAsCompleted} onRequestStatus={requestStatusChange}/></article>)}</div> : <p className="barber-empty">No tienes citas para hoy.</p>}</div><aside><h2>Mi información</h2><b>Servicios</b><p>{dashboard?.services.map((service) => service.name).join(' · ') || 'Sin servicios asignados'}</p><b>Horario laboral</b><p>{dashboard?.workingHours.length ? 'Configurado por administración' : 'Sin horario configurado'}</p></aside></section><section className="barber-upcoming"><h2>Próximas citas</h2>{upcoming.length ? upcoming.map((appointment) => <article key={appointment.id}><div><b>{appointment.serviceName}</b><span>{appointment.clientName}</span>{appointment.clientNotes && <p className="barber-appointment-note"><b>Solicitud:</b> {appointment.clientNotes}</p>}{appointment.adminNotes && <p className="barber-appointment-note internal"><b>Nota del equipo:</b> {appointment.adminNotes}</p>}</div><time>{new Date(appointment.startsAt).toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short' })} · {new Date(appointment.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</time><i>{appointment.status}</i><BarberAppointmentActions appointment={appointment} onComplete={markAsCompleted} onRequestStatus={requestStatusChange}/></article>) : <p className="barber-empty">No tienes próximas citas.</p>}</section>{statusChange && <BarberStatusModal change={{ ...statusChange, setReason: (reason) => setStatusChange((current) => ({ ...current, reason })) }} onClose={() => setStatusChange(null)} onConfirm={confirmStatusChange}/>}</main>;
 }
 
 function AppointmentDetail({ appointment, statusLabel, onCancel, settings }) {
