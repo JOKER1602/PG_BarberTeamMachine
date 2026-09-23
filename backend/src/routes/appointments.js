@@ -146,18 +146,19 @@ router.post('/multi', async (request, response, next) => {
     for (const service of finalAvailability.services) {
       const serviceEnd = new Date(serviceStart.getTime() + service.durationMinutes * 60_000);
       const [created] = await connection.execute(
-        `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, client_notes, updated_by) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
+        `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, client_notes, updated_by) VALUES (?, ?, ?, ?, ?, 'CONFIRMED', ?, ?)`,
         [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), clientNotes ?? null, request.auth.sub]
       );
       ids.push(created.insertId);
+      await scheduleAppointmentReminders(connection, created.insertId);
       serviceStart = serviceEnd;
     }
     await connection.execute(
-      `INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, 'APPOINTMENT_CREATED', 'Solicitud de reserva recibida', ?)`,
-      [request.auth.sub, ids[0], `Tu solicitud para ${finalAvailability.services.length} servicio(s) fue registrada y esta pendiente de confirmacion`]
+      `INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, 'APPOINTMENT_CONFIRMED', 'Cita confirmada', ?)`,
+      [request.auth.sub, ids[0], `Tu cita para ${finalAvailability.services.length} servicio(s) fue confirmada automáticamente`]
     );
     await connection.commit();
-    return response.status(201).json({ ids, status: 'PENDING' });
+    return response.status(201).json({ ids, status: 'CONFIRMED' });
   } catch (error) {
     await connection.rollback();
     return next(error);
@@ -201,16 +202,17 @@ router.post('/', async (request, response, next) => {
 
     const [appointmentResult] = await connection.execute(
       `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, updated_by)
-       VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`,
+       VALUES (?, ?, ?, ?, ?, 'CONFIRMED', ?)`,
       [request.auth.sub, barberId, serviceId, sqlDateTime(startAt), sqlDateTime(endAt), request.auth.sub]
     );
+    await scheduleAppointmentReminders(connection, appointmentResult.insertId);
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
-       VALUES (?, ?, 'APPOINTMENT_CREATED', 'Solicitud de reserva recibida', 'Tu solicitud de cita fue registrada y esta pendiente de confirmacion')`,
+       VALUES (?, ?, 'APPOINTMENT_CONFIRMED', 'Cita confirmada', 'Tu cita fue confirmada automáticamente')`,
       [request.auth.sub, appointmentResult.insertId]
     );
     await connection.commit();
-    return response.status(201).json({ id: appointmentResult.insertId, status: 'PENDING' });
+    return response.status(201).json({ id: appointmentResult.insertId, status: 'CONFIRMED' });
   } catch (error) {
     await connection.rollback();
     return next(error);
@@ -306,17 +308,18 @@ router.patch('/:id/reschedule', async (request, response, next) => {
     }
 
     await connection.execute(
-      `UPDATE appointments SET starts_at = ?, ends_at = ?, status = 'PENDING', updated_by = ? WHERE id = ?`,
+      `UPDATE appointments SET starts_at = ?, ends_at = ?, status = 'CONFIRMED', updated_by = ? WHERE id = ?`,
       [sqlDateTime(startAt), sqlDateTime(endAt), request.auth.sub, id.data]
     );
     await cancelAppointmentReminders(connection, id.data);
+    await scheduleAppointmentReminders(connection, id.data);
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
-       VALUES (?, ?, 'APPOINTMENT_RESCHEDULED', 'Solicitud reprogramada', 'Tu nueva fecha esta pendiente de confirmacion')`,
+       VALUES (?, ?, 'APPOINTMENT_RESCHEDULED', 'Cita reprogramada', 'Tu nueva fecha fue confirmada automáticamente')`,
       [appointmentRows[0].clientId, id.data]
     );
     await connection.commit();
-    return response.json({ message: 'Solicitud de reprogramacion registrada', status: 'PENDING' });
+    return response.json({ message: 'Cita reprogramada y confirmada', status: 'CONFIRMED' });
   } catch (error) {
     await connection.rollback();
     return next(error);
