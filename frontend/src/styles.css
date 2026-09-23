@@ -357,6 +357,50 @@ select:focus, input:focus { outline: 2px solid #d9a441; outline-offset: 2px; }
   .home-footer > div:first-child { grid-column: 1 / -1; }
 }
 
+/* Responsive hardening: the hero must grow with its editorial copy instead of
+   letting its CTAs overflow onto the services ticker. */
+html, body, #root { max-width: 100%; overflow-x: hidden; }
+.landing-hero {
+  height: max(960px, 100svh);
+  min-height: 960px;
+  grid-template-rows: minmax(0, 1fr) auto;
+}
+.hero-copy { min-width: 0; }
+.hero-actions { flex-wrap: wrap; }
+
+@media (min-width: 701px) and (max-width: 1080px) {
+  .home-nav-links { gap: clamp(.9rem, 2vw, 1.5rem); }
+  .home-nav-links a { font-size: .59rem; }
+  .home-client-access { padding: .56rem .68rem; font-size: .57rem; }
+  .landing-hero {
+    height: max(850px, 100svh);
+    min-height: 850px;
+    grid-template-columns: minmax(0, 1fr) 140px;
+    padding-inline: clamp(1.5rem, 5vw, 4rem);
+  }
+  .hero-copy h1 { font-size: clamp(4.4rem, 8.5vw, 6.6rem); }
+  .hero-side { margin-left: 2rem; }
+}
+
+@media (max-width: 700px) {
+  .landing-hero {
+    height: max(730px, 100svh);
+    min-height: 730px;
+    grid-template-rows: minmax(0, 1fr) auto;
+  }
+  .hero-actions { gap: .85rem; }
+  .hero-cta, .secondary-home-cta { max-width: 100%; }
+}
+
+@media (max-width: 380px) {
+  .home-client-access { padding: .52rem .55rem; font-size: .5rem; }
+  .hero-copy h1 { font-size: clamp(3.7rem, 18vw, 4.45rem); }
+  .hero-actions { gap: .7rem; }
+  .hero-cta { padding: .82rem .9rem; }
+  .home-footer { grid-template-columns: 1fr; }
+  .home-footer > div:first-child { grid-column: auto; }
+}
+
 /* Booking journey: a service profile that leads naturally into the real agenda. */
 .booking-experience { padding: 0; background: #111; color: #e9edf6; font-family: Arial, sans-serif; }
 .booking-experience .brand-mark { font-size: 1.3rem; }
