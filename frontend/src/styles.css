@@ -519,3 +519,6 @@ html, body, #root { max-width: 100%; overflow-x: hidden; }
 
 /* La declaración azul debe conservar la palabra completa en cualquier ancho. */
 .manifesto-section h2 em{font-size:clamp(2.65rem,3.85vw,4.35rem);letter-spacing:-.045em;line-height:.86}.manifesto-section h2 em span{display:block;white-space:nowrap}@media(max-width:700px){.manifesto-section h2 em{font-size:clamp(2.45rem,11.5vw,3.8rem)}}
+
+/* Mapa de ubicación más protagonista y con esquinas suaves. */
+.location-section{max-width:1120px}.location-content iframe{width:100%;max-width:none;height:380px;border-radius:18px;border-color:#414752;overflow:hidden}@media(max-width:700px){.location-content iframe{height:285px;border-radius:14px}}
