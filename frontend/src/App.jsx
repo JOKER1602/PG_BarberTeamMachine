@@ -3,6 +3,14 @@ import { api, clearSession, saveSession } from './api.js';
 
 const weekdays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
+function useAutoDismiss(message, dismiss, delay = 4500) {
+  useEffect(() => {
+    if (!message) return undefined;
+    const timer = window.setTimeout(() => dismiss(''), delay);
+    return () => window.clearTimeout(timer);
+  }, [message, dismiss, delay]);
+}
+
 function Landing({ servicesCount, barbersCount, settings, onReserve, session, initialLogin = false }) {
   const business = settings ?? { businessName: 'Barber Team Machine', address: 'Buenos Aires 130', city: 'Cochabamba', country: 'Bolivia', phone: '77469963', hoursText: 'Lunes a sábado · 10:00 AM — 7:00 PM', mapsUrl: 'https://maps.app.goo.gl/At4qrWe6P2KrDCyW9', description: 'Precisión, técnica y estilo para cada visita.' };
   const [showLogin, setShowLogin] = useState(initialLogin);
@@ -58,6 +66,7 @@ function PasswordRecoveryPage() {
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  useAutoDismiss(message, setMessage, 6000);
 
   async function submit(event) {
     event.preventDefault();
@@ -119,6 +128,7 @@ function ReservationWizard() {
   const [professionalQuery, setProfessionalQuery] = useState('');
   const [serviceFilter, setServiceFilter] = useState('all');
   const [serviceQuery, setServiceQuery] = useState('');
+  useAutoDismiss(notice, setNotice);
 
   useEffect(() => {
     Promise.all([api.services(), api.barbers()])
@@ -423,6 +433,7 @@ function ReservationWizard() {
 function BookingPage({ onBackHome }) {
   const [services, setServices] = useState([]); const [barbers, setBarbers] = useState([]); const [reviewsData, setReviewsData] = useState({ summary: { total: 0, average: 0, five: 0, four: 0, three: 0, two: 0, one: 0 }, reviews: [] }); const [settings, setSettings] = useState(null); const [session, setSession] = useState(() => JSON.parse(localStorage.getItem('btm_user') ?? 'null'));
   const [selection, setSelection] = useState({ serviceId: '', barberId: '', date: '' }); const [slots, setSlots] = useState([]); const [authMode, setAuthMode] = useState('login'); const [authForm, setAuthForm] = useState({ email: '', password: '', firstName: '', lastName: '' }); const [notice, setNotice] = useState(''); const [error, setError] = useState(''); const [serviceQuery, setServiceQuery] = useState(''); const [serviceFilter, setServiceFilter] = useState('all'); const [pendingClientNotes, setPendingClientNotes] = useState(() => sessionStorage.getItem('btm_pending_client_notes') ?? '');
+  useAutoDismiss(notice, setNotice);
   useEffect(() => { Promise.all([api.services(), api.barbers(), api.businessSettings(), api.reviews()]).then(([s, b, configuration, reviews]) => { setServices(s.services); setBarbers(b.barbers); setSettings(configuration.settings); setReviewsData(reviews); }).catch((e) => setError(e.message)); }, []);
   async function authenticate(e) { e.preventDefault(); try { const result = authMode === 'login' ? await api.login(authForm) : await api.register(authForm); saveSession(result); setSession(result.user); setNotice('Sesión iniciada. Ahora puedes elegir un horario.'); } catch (err) { setError(err.message); } }
   async function getSlots() { try { setSlots((await api.availability(selection.barberId, selection.serviceId, selection.date)).slots); } catch (err) { setError(err.message); } }
@@ -458,6 +469,7 @@ function AdminPanel({ services, barbers, categories, reloadCatalog }) {
   const [reschedule, setReschedule] = useState({ id: '', startsAt: '' });
   const [adminNoteDrafts, setAdminNoteDrafts] = useState({});
   const [businessSettings, setBusinessSettings] = useState({ businessName: '', address: '', city: '', country: '', phone: '', whatsapp: '', hoursText: '', mapsUrl: '', instagramUrl: '', facebookUrl: '', description: '' });
+  useAutoDismiss(message, setMessage);
 
   const makeQuery = (source = filters, includeStatus = true) => {
     const query = new URLSearchParams();
@@ -759,6 +771,7 @@ function ClientArea() {
   const [profile, setProfile] = useState(() => ({ firstName: session?.firstName ?? '', lastName: session?.lastName ?? '', phone: session?.phone?.replace(/^\+591\s?/, '') ?? '' }));
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
+  useAutoDismiss(message, setMessage);
 
   useEffect(() => {
     if (!session) return;
