@@ -862,11 +862,19 @@ function App() {
   const loadCatalog = async () => { const [s, b, configuration] = await Promise.all([api.services(), api.barbers(), api.businessSettings()]); setServices(s.services); setBarbers(b.barbers); setSettings(configuration.settings); };
   useEffect(() => { loadCatalog().catch((e) => setError(e.message)); }, []);
   useEffect(() => { if (session) Promise.all([api.appointments(), api.notifications()]).then(([a, n]) => { setAppointments(a.appointments); setNotifications(n.notifications); }).catch((e) => setError(e.message)); }, [session]);
+  useEffect(() => {
+    const restoreHomeView = (event) => {
+      setHomeView(event.state?.btmHomeView === 'booking' ? 'booking' : 'landing');
+      window.scrollTo({ top: 0, behavior: 'smooth' });
+    };
+    window.addEventListener('popstate', restoreHomeView);
+    return () => window.removeEventListener('popstate', restoreHomeView);
+  }, []);
   async function authenticate(e) { e.preventDefault(); try { const result = authMode === 'login' ? await api.login(authForm) : await api.register(authForm); saveSession(result); setSession(result.user); setMessage('Sesión iniciada correctamente.'); } catch (error) { setError(error.message); } }
   async function loadSlots() { try { setSlots((await api.availability(selection.barberId, selection.serviceId, selection.date)).slots); } catch (e) { setError(e.message); } }
   async function book(slot) { try { if (reschedulingId) { await api.rescheduleAppointment(reschedulingId, slot.startsAt); setReschedulingId(null); setMessage('Reprogramación confirmada automáticamente.'); } else { await api.createAppointment({ barberId: selection.barberId, serviceId: selection.serviceId, startsAt: slot.startsAt }); setMessage('Cita confirmada automáticamente.'); } setAppointments((await api.appointments()).appointments); setSlots((items) => items.filter((item) => item.startsAt !== slot.startsAt)); } catch (e) { setError(e.message); } }
-  const goToBooking = () => { setHomeView('booking'); window.scrollTo({ top: 0, behavior: 'smooth' }); };
-  const returnHome = () => { setHomeView('landing'); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const goToBooking = () => { if (homeView !== 'booking') window.history.pushState({ ...window.history.state, btmHomeView: 'booking' }, '', window.location.href); setHomeView('booking'); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const returnHome = () => { if (window.history.state?.btmHomeView === 'booking') window.history.back(); else { setHomeView('landing'); window.scrollTo({ top: 0, behavior: 'smooth' }); } };
   const initialLogin = new URLSearchParams(window.location.search).get('login') === '1';
   return <main className={`app-shell${homeView === 'booking' ? ' app-shell-booking' : ''}`}>{homeView === 'booking' ? <BookingPage onBackHome={returnHome}/> : <Landing servicesCount={services.length} barbersCount={barbers.length} settings={settings} onReserve={goToBooking} session={session} initialLogin={initialLogin}/>}</main>;
 }
