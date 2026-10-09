@@ -115,8 +115,6 @@ function ReservationWizard() {
   const [showAuthModal, setShowAuthModal] = useState(reservationParams.get('login') === '1');
   const [showPhoneModal, setShowPhoneModal] = useState(false);
   const [phoneInput, setPhoneInput] = useState('');
-  const [detailView, setDetailView] = useState('schedule');
-  const [firstVisit, setFirstVisit] = useState('');
   const [comment, setComment] = useState(() => sessionStorage.getItem('btm_pending_client_notes') ?? '');
   const [professionalQuery, setProfessionalQuery] = useState('');
   const [serviceFilter, setServiceFilter] = useState('all');
@@ -224,8 +222,8 @@ function ReservationWizard() {
       setSession(result.user);
       localStorage.setItem('btm_user', JSON.stringify(result.user));
       setShowPhoneModal(false);
-      setDetailView('survey');
-      setNotice('Teléfono guardado. Cuéntanos un detalle antes de confirmar.');
+      setStep(3);
+      setNotice('Teléfono guardado. Revisa los datos antes de confirmar tu cita.');
     } catch (profileError) {
       if (/token|sesión|autoriz/i.test(profileError.message)) {
         clearSession();
@@ -327,7 +325,7 @@ function ReservationWizard() {
       </aside>
     </section>}
 
-    {step === 2 && detailView === 'schedule' && <section className="wizard-content wizard-details">
+    {step === 2 && <section className="wizard-content wizard-details">
       <div className="wizard-selection">
         <button className="wizard-back" onClick={() => setStep(1)}>← Volver a servicios</button>
         <h1>{rescheduleId ? 'Cambiar fecha y hora' : repeatBooking ? 'Reservar nuevamente' : 'Horarios disponibles'}</h1>
@@ -350,26 +348,6 @@ function ReservationWizard() {
         {selectedSlot && <p className="summary-selected-time">Horario elegido: <b>{new Date(selectedSlot.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</b></p>}
         <div className="summary-total"><span>Total · {totalDuration} min</span><b>Bs {totalPrice.toFixed(0)}</b></div>
         {selectedSlot ? <button className="wizard-primary" onClick={continueWithSelectedTime}>{rescheduleId ? 'Guardar nuevo horario' : 'Continuar'}</button> : <small>Selecciona un horario para continuar.</small>}
-      </aside>
-    </section>}
-
-    {step === 2 && detailView === 'survey' && <section className="checkout-stage">
-      <div className="checkout-main">
-        <p className="checkout-crumbs">Servicios &nbsp;›&nbsp; Profesional &nbsp;›&nbsp; Hora &nbsp;›&nbsp; Confirmar</p>
-        <h1>¿Es tu primera visita a Barber Team Machine?</h1>
-        <div className="survey-options">
-          <button className={firstVisit === 'yes' ? 'selected' : ''} onClick={() => setFirstVisit('yes')}><b>Sí</b><span>Esta es mi primera visita</span></button>
-          <button className={firstVisit === 'no' ? 'selected' : ''} onClick={() => setFirstVisit('no')}><b>No</b><span>No es mi primera visita</span></button>
-        </div>
-      </div>
-      <aside className="checkout-summary">
-        <h2>BTM · Cochabamba</h2>
-        <p>📅 {selection.date && new Date(`${selection.date}T12:00:00`).toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
-        <p>◷ {selectedSlot && new Date(selectedSlot.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })} · {totalDuration} min</p>
-        <hr/>
-        {selectedServices.map((service) => <p className="checkout-item" key={service.id}><span>{service.name}<small>Con {selectedBarber?.displayName}</small></span><b>Bs {Number(service.price).toFixed(0)}</b></p>)}
-        <p className="checkout-total"><b>Total</b><b>Bs {totalPrice.toFixed(0)}</b></p>
-        <button className="checkout-primary" disabled={!firstVisit} onClick={() => { setStep(3); setNotice('Revisa los datos antes de confirmar tu cita.'); }}>Continuar →</button>
       </aside>
     </section>}
 
