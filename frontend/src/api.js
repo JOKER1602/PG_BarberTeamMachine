@@ -24,10 +24,10 @@ async function request(path, options = {}) {
   return data;
 }
 
-async function upload(path, file) {
+async function upload(path, file, field = 'photo') {
   const token = localStorage.getItem('btm_token');
   const body = new FormData();
-  body.append('photo', file);
+  body.append(field, file);
   const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body });
   const data = await response.json();
   if (!response.ok) {
@@ -43,6 +43,8 @@ export const api = {
   reviews: () => request('/reviews'),
   createReview: (body) => request('/reviews', { method: 'POST', body: JSON.stringify(body) }),
   updateBusinessSettings: (body) => request('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
+  uploadPaymentQr: (file) => upload('/settings/payment-qr', file, 'qr'),
+  uploadPaymentProof: (file) => upload('/payments/proof', file, 'proof'),
   services: () => request('/services'),
   serviceCategories: () => request('/services/categories'),
   createServiceCategory: (body) => request('/services/categories', { method: 'POST', body: JSON.stringify(body) }),

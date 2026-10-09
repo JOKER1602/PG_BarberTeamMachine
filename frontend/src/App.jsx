@@ -109,6 +109,7 @@ function ReservationWizard() {
   const initialBookingDate = new Date().toLocaleDateString('en-CA');
   const [services, setServices] = useState([]);
   const [barbers, setBarbers] = useState([]);
+  const [settings, setSettings] = useState(null);
   const [session, setSession] = useState(() => JSON.parse(localStorage.getItem('btm_user') ?? 'null'));
   const [serviceId, setServiceId] = useState(selectedFromUrl);
   const [extraServiceIds, setExtraServiceIds] = useState([]);
@@ -127,13 +128,16 @@ function ReservationWizard() {
   const [professionalQuery, setProfessionalQuery] = useState('');
   const [serviceFilter, setServiceFilter] = useState('all');
   const [serviceQuery, setServiceQuery] = useState('');
+  const [paymentProofFile, setPaymentProofFile] = useState(null);
+  const [submittingPayment, setSubmittingPayment] = useState(false);
   useAutoDismiss(notice, setNotice);
 
   useEffect(() => {
-    Promise.all([api.services(), api.barbers()])
-      .then(([serviceResult, barberResult]) => {
+    Promise.all([api.services(), api.barbers(), api.businessSettings()])
+      .then(([serviceResult, barberResult, settingsResult]) => {
         setServices(serviceResult.services);
         setBarbers(barberResult.barbers);
+        setSettings(settingsResult.settings);
       })
       .catch((requestError) => setError(requestError.message));
   }, []);
@@ -251,8 +255,11 @@ function ReservationWizard() {
 
   async function reserve() {
     if (!selectedSlot) return;
+    if (!paymentProofFile) { setError('Sube el comprobante de pago para enviar la reserva.'); return; }
     try {
-      await api.createAppointments({ barberId: selection.barberId, serviceIds: selectedServiceIds, startsAt: selectedSlot.startsAt });
+      setSubmittingPayment(true);
+      const { proofUrl } = await api.uploadPaymentProof(paymentProofFile);
+      await api.createAppointments({ barberId: selection.barberId, serviceIds: selectedServiceIds, startsAt: selectedSlot.startsAt, paymentProofUrl: proofUrl });
       window.location.assign('/mi-cuenta?tab=historial');
     } catch (reservationError) {
       if (/token|sesión|autoriz/i.test(reservationError.message)) {
@@ -263,7 +270,7 @@ function ReservationWizard() {
       } else {
         setError(reservationError.message);
       }
-    }
+    } finally { setSubmittingPayment(false); }
   }
 
   async function continueWithSelectedTime() {
@@ -357,8 +364,10 @@ function ReservationWizard() {
       <div className="checkout-main">
         <p className="checkout-crumbs">Servicios &nbsp;›&nbsp; Profesional &nbsp;›&nbsp; Hora &nbsp;›&nbsp; <b>Confirmar</b></p>
         <h1>Revisar y confirmar</h1>
+        <h2>Pago por QR</h2>
+        <article className="checkout-card payment-checkout-card"><b>Realiza el pago exacto de Bs {totalPrice.toFixed(0)}</b><p>Escanea el QR, completa el pago y luego sube una captura o foto de tu comprobante. La reserva quedará pendiente hasta que el equipo revise el pago.</p>{settings?.paymentQrUrl ? <img className="payment-qr-image" src={settings.paymentQrUrl} alt="Código QR para pago"/> : <p className="payment-qr-missing">El QR de pagos aún no fue configurado. Comunícate con la barbería.</p>}<label className="payment-proof-input">Comprobante de pago<input type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setPaymentProofFile(event.target.files?.[0] ?? null)}/><small>{paymentProofFile ? `${paymentProofFile.name} listo para enviar` : 'JPG, PNG o WEBP · máximo 5 MB'}</small></label></article>
         <h2>Más detalles</h2>
-        <article className="checkout-card"><b>Política de cancelación</b><p>Cancela gratis en cualquier momento.</p></article>
+        <article className="checkout-card"><b>Política de cancelación</b><p>Cancela gratis en cualquier momento antes de que se atienda tu cita.</p></article>
       </div>
       <aside className="checkout-summary">
         <h2>BTM · Cochabamba</h2>
@@ -367,7 +376,7 @@ function ReservationWizard() {
         <hr/>
         {selectedServices.map((service) => <p className="checkout-item" key={service.id}><span>{service.name}<small>Con {selectedBarber?.displayName}</small></span><b>Bs {Number(service.price).toFixed(0)}</b></p>)}
         <p className="checkout-total"><b>Total</b><b>Bs {totalPrice.toFixed(0)}</b></p>
-        <button className="checkout-primary" onClick={reserve}>Confirmar cita</button>
+        <button className="checkout-primary" disabled={!settings?.paymentQrUrl || !paymentProofFile || submittingPayment} onClick={reserve}>{submittingPayment ? 'Enviando comprobante...' : 'Enviar pago y reservar'}</button>
       </aside>
     </section>}
 
@@ -427,7 +436,7 @@ function BookingPage({ onBackHome }) {
   useEffect(() => { Promise.all([api.services(), api.barbers(), api.businessSettings(), api.reviews()]).then(([s, b, configuration, reviews]) => { setServices(s.services); setBarbers(b.barbers); setSettings(configuration.settings); setReviewsData(reviews); }).catch((e) => setError(e.message)); }, []);
   async function authenticate(e) { e.preventDefault(); try { const result = authMode === 'login' ? await api.login(authForm) : await api.register(authForm); saveSession(result); setSession(result.user); setNotice('Sesión iniciada. Ahora puedes elegir un horario.'); } catch (err) { setError(err.message); } }
   async function getSlots() { try { setSlots((await api.availability(selection.barberId, selection.serviceId, selection.date)).slots); } catch (err) { setError(err.message); } }
-  async function reserve(slot) { try { await api.createAppointment({ barberId: selection.barberId, serviceId: selection.serviceId, startsAt: slot.startsAt }); setNotice('Cita reservada y confirmada automáticamente.'); setSlots((items) => items.filter((item) => item.startsAt !== slot.startsAt)); } catch (err) { setError(err.message); } }
+  function reserve() { window.location.assign(`/reservar/cita?service=${selection.serviceId}`); }
   const filteredServices = services.filter((service) => (serviceFilter === 'all' || service.categorySlug === serviceFilter) && service.name.toLowerCase().includes(serviceQuery.trim().toLowerCase()));
   const serviceCategories = [...new Map(services.filter((service) => service.categorySlug).map((service) => [service.categorySlug, { slug: service.categorySlug, name: service.categoryName }])).values()];
   const business = settings ?? { businessName: 'Barber Team Machine', address: 'Buenos Aires 130', city: 'Cochabamba', country: 'Bolivia', phone: '77469963', hoursText: 'Lunes a sábado · 10:00 AM — 7:00 PM', mapsUrl: 'https://maps.app.goo.gl/At4qrWe6P2KrDCyW9' };
@@ -444,7 +453,7 @@ function BookingPage({ onBackHome }) {
     </div><footer className="booking-footer"><div><b>Barber Team Machine</b><p>Precisión, técnica y estilo para cada visita.</p></div><div><b>Navegación</b><a href="#servicios">Servicios</a><a href="#equipo">Colaboradores</a><a href="#agenda">Reservar</a></div><div><b>Más información</b><a href="https://maps.app.goo.gl/At4qrWe6P2KrDCyW9" target="_blank" rel="noreferrer">⌖ Buenos Aires 130</a><span>◷ 10:00 AM — 7:00 PM</span></div><small>© 2026 Barber Team Machine. Todos los derechos reservados.</small></footer></main>;
 }
 
-const statusLabels = { PENDING: 'Pendiente', CONFIRMED: 'Confirmada', COMPLETED: 'Atendida', CANCELLED: 'Cancelada', NO_SHOW: 'No asistió' };
+const statusLabels = { PENDING: 'Pendiente de pago', CONFIRMED: 'Confirmada', COMPLETED: 'Atendida', CANCELLED: 'Cancelada', NO_SHOW: 'No asistió' };
 
 function AdminPanel({ services, barbers, categories, reloadCatalog }) {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -457,6 +466,7 @@ function AdminPanel({ services, barbers, categories, reloadCatalog }) {
   const [staffAccount, setStaffAccount] = useState({ barberId: '', firstName: '', lastName: '', email: '', password: '', phone: '' });
   const [reschedule, setReschedule] = useState({ id: '', startsAt: '' });
   const [adminNoteDrafts, setAdminNoteDrafts] = useState({});
+  const [paymentQrFile, setPaymentQrFile] = useState(null);
   const [businessSettings, setBusinessSettings] = useState({ businessName: '', address: '', city: '', country: '', phone: '', whatsapp: '', hoursText: '', mapsUrl: '', instagramUrl: '', facebookUrl: '', description: '' });
   useAutoDismiss(message, setMessage);
 
@@ -488,6 +498,7 @@ function AdminPanel({ services, barbers, categories, reloadCatalog }) {
   const createAccount = async (event) => { event.preventDefault(); try { await api.createBarberAccount({ ...staffAccount, barberId: Number(staffAccount.barberId) }); setStaffAccount({ barberId: '', firstName: '', lastName: '', email: '', password: '', phone: '' }); await reloadCatalog(); await refresh(); saveMessage('Cuenta de acceso del barbero creada.'); } catch (error) { saveMessage(error.message); } };
   const reprogramAppointment = async (event) => { event.preventDefault(); try { await api.rescheduleAppointment(reschedule.id, new Date(reschedule.startsAt).toISOString()); setReschedule({ id: '', startsAt: '' }); await refresh(); saveMessage('Cita reprogramada y confirmada automáticamente.'); } catch (error) { saveMessage(error.message); } };
   const saveBusinessSettings = async (event) => { event.preventDefault(); try { const normalised = Object.fromEntries(Object.entries(businessSettings).map(([key, value]) => [key, value || null])); const result = await api.updateBusinessSettings(normalised); setBusinessSettings(result.settings); saveMessage('Configuración del negocio actualizada.'); } catch (error) { saveMessage(error.message); } };
+  const savePaymentQr = async (event) => { event.preventDefault(); if (!paymentQrFile) { saveMessage('Selecciona la imagen de tu QR.'); return; } try { const result = await api.uploadPaymentQr(paymentQrFile); setBusinessSettings(result.settings); setPaymentQrFile(null); saveMessage('QR de pagos actualizado.'); } catch (error) { saveMessage(error.message); } };
   const exportReport = () => {
     const rows = [['Cliente', 'Servicio', 'Barbero', 'Fecha y hora', 'Estado'], ...appointments.map((item) => [item.clientName, item.serviceName, item.barberName, new Date(item.startsAt).toLocaleString('es-BO'), statusLabels[item.status] ?? item.status])];
     const csv = rows.map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\n');
@@ -507,6 +518,8 @@ function AdminPanel({ services, barbers, categories, reloadCatalog }) {
 
     {activeTab === 'agenda' && <div className="admin-agenda-layout"><section className="admin-card"><div className="admin-card-heading"><div><h3>Agenda centralizada</h3><p>{appointments.length} cita(s) encontradas.</p></div></div><div className="admin-appointment-list">{appointments.length ? appointments.map((item) => <article key={item.id}><time><b>{new Date(item.startsAt).toLocaleDateString('es-BO', { day: '2-digit', month: 'short' })}</b><span>{new Date(item.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</span></time><div><strong>{item.clientName}</strong><p>{item.serviceName} · {item.barberName}</p>{item.cancellationReason && <p className="appointment-note cancellation"><b>Motivo de cancelación:</b> {item.cancellationReason}</p>}</div><span className={`admin-status ${item.status.toLowerCase()}`}>{statusLabels[item.status]}</span><div className="admin-appointment-actions">{['PENDING', 'CONFIRMED'].includes(item.status) && <><button onClick={() => updateStatus(item.id, 'COMPLETED')}>Atendida</button><button onClick={() => updateStatus(item.id, 'NO_SHOW')}>No asistió</button><button className="danger" onClick={() => updateStatus(item.id, 'CANCELLED')}>Cancelar</button><button className="quiet" onClick={() => setReschedule({ id: item.id, startsAt: new Date(item.startsAt).toISOString().slice(0, 16) })}>Reprogramar</button></>}</div><div className="admin-note-editor"><label>Nota interna<textarea value={adminNoteDrafts[item.id] ?? item.adminNotes ?? ''} onChange={(event) => setAdminNoteDrafts({ ...adminNoteDrafts, [item.id]: event.target.value })} placeholder="Solo visible para administración y barbero."/></label><button className="quiet" onClick={() => saveAdminNote(item.id)}>Guardar nota</button></div></article>) : <p className="admin-empty">No hay citas con estos filtros.</p>}</div></section>{reschedule.id && <aside className="admin-card reschedule-card"><h3>Reprogramar cita</h3><p>La nueva fecha quedará confirmada automáticamente.</p><form onSubmit={reprogramAppointment}><input type="datetime-local" required value={reschedule.startsAt} onChange={(event) => setReschedule({ ...reschedule, startsAt: event.target.value })}/><button>Guardar nueva fecha</button><button type="button" className="quiet" onClick={() => setReschedule({ id: '', startsAt: '' })}>Cancelar</button></form></aside>}</div>}
 
+    {activeTab === 'agenda' && appointments.some((item) => item.status === 'PENDING' && item.paymentProofUrl) && <section className="admin-card payment-review-list"><p className="section-label">Cobros</p><h3>Pagos pendientes de revisión</h3>{appointments.filter((item) => item.status === 'PENDING' && item.paymentProofUrl).map((item) => <article key={`payment-${item.id}`}><div><b>{item.clientName} · {item.serviceName}</b><span>Bs {Number(item.paymentAmount ?? 0).toFixed(0)} · {new Date(item.startsAt).toLocaleString('es-BO')}</span></div><a href={item.paymentProofUrl} target="_blank" rel="noreferrer">Ver comprobante</a><button onClick={() => updateStatus(item.id, 'CONFIRMED')}>Aprobar pago</button><button className="danger" onClick={() => updateStatus(item.id, 'CANCELLED')}>Rechazar pago</button></article>)}</section>}
+
     {activeTab === 'servicios' && <div className="admin-management-grid"><section className="admin-card"><h3>Nueva categoría</h3><form onSubmit={createCategory} className="admin-form"><input placeholder="Nombre, por ejemplo: Tratamientos" required value={category.name} onChange={(event) => setCategory({ ...category, name: event.target.value })}/><input placeholder="Identificador, por ejemplo: tratamientos" required pattern="[a-z0-9-]{2,80}" value={category.slug} onChange={(event) => setCategory({ ...category, slug: event.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '-') })}/><button>Crear categoría</button></form></section><section className="admin-card"><h3>Nuevo servicio</h3><form onSubmit={createService} className="admin-form"><select required value={service.categoryId} onChange={(event) => setService({ ...service, categoryId: event.target.value })}><option value="">Selecciona categoría</option>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><input placeholder="Nombre del servicio" required value={service.name} onChange={(event) => setService({ ...service, name: event.target.value })}/><textarea placeholder="Descripción breve" value={service.description} onChange={(event) => setService({ ...service, description: event.target.value })}/><div><input type="number" min="0" step="0.01" placeholder="Precio en Bs" required value={service.price} onChange={(event) => setService({ ...service, price: event.target.value })}/><input type="number" min="1" placeholder="Duración (min)" required value={service.durationMinutes} onChange={(event) => setService({ ...service, durationMinutes: event.target.value })}/></div><button>Crear servicio</button></form></section><section className="admin-card"><h3>Catálogo de servicios</h3><div className="admin-catalog-list">{services.map((item) => <article key={item.id}><div><b>{item.name}</b><span>{item.categoryName} · Bs {Number(item.price).toFixed(0)} · {item.durationMinutes} min</span><small>{item.isActive ? 'Activo' : 'Inactivo'}</small></div><button className="quiet" onClick={() => setEditingService({ ...item })}>Editar</button></article>)}</div></section>{editingService && <section className="admin-card edit-card"><h3>Editar servicio</h3><form onSubmit={saveService} className="admin-form"><select required value={editingService.categoryId} onChange={(event) => setEditingService({ ...editingService, categoryId: event.target.value })}>{categories.map((item) => <option key={item.id} value={item.id}>{item.name}</option>)}</select><input required value={editingService.name} onChange={(event) => setEditingService({ ...editingService, name: event.target.value })}/><textarea value={editingService.description ?? ''} onChange={(event) => setEditingService({ ...editingService, description: event.target.value })}/><input type="number" min="0" step="0.01" required value={editingService.price} onChange={(event) => setEditingService({ ...editingService, price: event.target.value })}/><input type="number" min="1" required value={editingService.durationMinutes} onChange={(event) => setEditingService({ ...editingService, durationMinutes: event.target.value })}/><label className="admin-check"><input type="checkbox" checked={editingService.isActive} onChange={(event) => setEditingService({ ...editingService, isActive: event.target.checked })}/> Servicio disponible para reservas</label><button>Guardar cambios</button><button type="button" className="quiet" onClick={() => setEditingService(null)}>Cerrar</button></form></section>}</div>}
 
     {activeTab === 'equipo' && <div className="admin-team-area"><div className="admin-management-grid"><section className="admin-card"><h3>Registrar barbero</h3><form onSubmit={createBarber} className="admin-form"><input placeholder="Nombre visible" required value={barber.displayName} onChange={(event) => setBarber({ ...barber, displayName: event.target.value })}/><textarea placeholder="Biografía breve" value={barber.bio} onChange={(event) => setBarber({ ...barber, bio: event.target.value })}/><label className="photo-upload-field">Foto del barbero<input key={barberPhotoInputKey} type="file" accept="image/jpeg,image/png,image/webp" onChange={(event) => setBarberPhotoFile(event.target.files?.[0] ?? null)}/><small>{barberPhotoFile ? `${barberPhotoFile.name} lista para subir` : 'JPG, PNG o WEBP · máximo 5 MB'}</small></label><button>Registrar barbero</button></form></section><section className="admin-card"><h3>Crear acceso para barbero</h3><form onSubmit={createAccount} className="admin-form"><select required value={staffAccount.barberId} onChange={(event) => setStaffAccount({ ...staffAccount, barberId: event.target.value })}><option value="">Selecciona un barbero sin cuenta</option>{accountableBarbers.map((item) => <option key={item.id} value={item.id}>{item.displayName}</option>)}</select><div><input placeholder="Nombre" required value={staffAccount.firstName} onChange={(event) => setStaffAccount({ ...staffAccount, firstName: event.target.value })}/><input placeholder="Apellido" required value={staffAccount.lastName} onChange={(event) => setStaffAccount({ ...staffAccount, lastName: event.target.value })}/></div><input type="email" placeholder="Correo" required value={staffAccount.email} onChange={(event) => setStaffAccount({ ...staffAccount, email: event.target.value })}/><input type="password" minLength="8" placeholder="Contraseña temporal" required value={staffAccount.password} onChange={(event) => setStaffAccount({ ...staffAccount, password: event.target.value })}/><input placeholder="Teléfono (opcional)" value={staffAccount.phone} onChange={(event) => setStaffAccount({ ...staffAccount, phone: event.target.value })}/><button>Crear cuenta de acceso</button></form></section><section className="admin-card"><h3>Equipo registrado</h3><div className="admin-catalog-list">{barbers.map((item) => <article key={item.id}>{item.photoUrl ? <img className="admin-barber-photo" src={item.photoUrl} alt=""/> : <div className="admin-barber-placeholder">{item.displayName.slice(0, 1)}</div>}<div><b>{item.displayName}</b><span>{item.serviceIds?.length ?? 0} servicio(s) asignado(s)</span><small>{item.isActive ? 'Activo' : 'Inactivo'} · {item.userId ? 'Con cuenta de acceso' : 'Sin cuenta de acceso'}</small></div><button className="quiet" onClick={() => { setEditingBarber({ ...item }); setEditingBarberPhotoFile(null); setBarberId(String(item.id)); setAssignedServices(item.serviceIds ?? []); }}>Gestionar</button></article>)}</div></section></div>
@@ -517,6 +530,7 @@ function AdminPanel({ services, barbers, categories, reloadCatalog }) {
     {activeTab === 'reportes' && <div className="admin-report-grid"><section className="admin-card"><p className="section-label">Reporte de citas</p><h3>Exporta la información filtrada</h3><p>Incluye cliente, servicio, barbero, fecha y estado de las {appointments.length} citas consultadas.</p><button onClick={exportReport}>Descargar CSV</button></section><section className="admin-card"><p className="section-label">Resumen operativo</p><h3>Indicadores actuales</h3><p>{metrics.completed ?? 0} citas atendidas, {metrics.cancelled ?? 0} canceladas y {metrics.recurringClients ?? 0} clientes recurrentes dentro del rango seleccionado.</p><button className="quiet" onClick={() => setActiveTab('dashboard')}>Ver dashboard</button></section></div>}
 
     {activeTab === 'configuracion' && <section className="admin-card business-settings-card"><p className="section-label">Datos públicos</p><h3>Configuración de la barbería</h3><p>Estos datos se usan en las páginas públicas y en los correos de recordatorio.</p><form className="admin-form" onSubmit={saveBusinessSettings}><div><input placeholder="Nombre comercial" required value={businessSettings.businessName ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, businessName: event.target.value })}/><input placeholder="Teléfono" required value={businessSettings.phone ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, phone: event.target.value })}/></div><div><input placeholder="Dirección" required value={businessSettings.address ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, address: event.target.value })}/><input placeholder="Ciudad" required value={businessSettings.city ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, city: event.target.value })}/></div><div><input placeholder="País" required value={businessSettings.country ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, country: event.target.value })}/><input placeholder="WhatsApp" required value={businessSettings.whatsapp ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, whatsapp: event.target.value })}/></div><input placeholder="Horario general" required value={businessSettings.hoursText ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, hoursText: event.target.value })}/><input type="url" placeholder="Enlace de Google Maps" value={businessSettings.mapsUrl ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, mapsUrl: event.target.value })}/><input type="url" placeholder="Instagram (opcional)" value={businessSettings.instagramUrl ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, instagramUrl: event.target.value })}/><input type="url" placeholder="Facebook (opcional)" value={businessSettings.facebookUrl ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, facebookUrl: event.target.value })}/><textarea placeholder="Descripción corta" value={businessSettings.description ?? ''} onChange={(event) => setBusinessSettings({ ...businessSettings, description: event.target.value })}/><button>Guardar configuración</button></form></section>}
+    {activeTab === 'configuracion' && <section className="admin-card payment-qr-admin"><p className="section-label">Cobros</p><h3>QR para pagos</h3><p>Esta imagen se mostrará al cliente antes de enviar su comprobante. Los pagos no confirman una cita hasta que los apruebes desde Agenda.</p>{businessSettings.paymentQrUrl && <img src={businessSettings.paymentQrUrl} alt="QR de pagos actual"/>}<form className="admin-form" onSubmit={savePaymentQr}><label className="photo-upload-field">Imagen del código QR<input type="file" required accept="image/jpeg,image/png,image/webp" onChange={(event) => setPaymentQrFile(event.target.files?.[0] ?? null)}/><small>{paymentQrFile ? paymentQrFile.name : 'JPG, PNG o WEBP · máximo 5 MB'}</small></label><button>Subir QR de pago</button></form></section>}
   </section>;
 }
 
@@ -851,7 +865,7 @@ function ClientArea() {
   const appointmentsByView = { curso: inProgress, programadas: programmed, historial: pastAppointments };
   const visibleAppointments = appointmentsByView[historyView];
   const selectedAppointment = visibleAppointments.find((appointment) => String(appointment.id) === String(selectedAppointmentId)) ?? visibleAppointments[0] ?? null;
-  const statusLabel = { PENDING: 'Pendiente de confirmación', CONFIRMED: 'Confirmada', COMPLETED: 'Atendida', CANCELLED: 'Cancelada', NO_SHOW: 'No asistió' };
+  const statusLabel = { PENDING: 'Pendiente de pago', CONFIRMED: 'Confirmada', COMPLETED: 'Atendida', CANCELLED: 'Cancelada', NO_SHOW: 'No asistió' };
 
   return <main className="client-area">
     <header className="client-header"><a href="/">BTM<span>.</span></a><div><span>{session.firstName} {session.lastName}</span><button onClick={() => { clearSession(); window.location.assign('/'); }}>Cerrar sesión</button></div></header>

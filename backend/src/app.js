@@ -11,6 +11,7 @@ import notificationsRouter from './routes/notifications.js';
 import servicesRouter from './routes/services.js';
 import settingsRouter from './routes/settings.js';
 import reviewsRouter from './routes/reviews.js';
+import paymentsRouter from './routes/payments.js';
 
 const app = express();
 
@@ -24,6 +25,7 @@ app.use('/api/barber', barberPortalRouter);
 app.use('/api/services', servicesRouter);
 app.use('/api/settings', settingsRouter);
 app.use('/api/reviews', reviewsRouter);
+app.use('/api/payments', paymentsRouter);
 app.use('/api/barbers', barbersRouter);
 app.use('/api/appointments', appointmentsRouter);
 app.use('/api/notifications', notificationsRouter);

@@ -14,6 +14,7 @@ CREATE TABLE business_settings (
   maps_url VARCHAR(2048),
   instagram_url VARCHAR(2048),
   facebook_url VARCHAR(2048),
+  payment_qr_url VARCHAR(2048),
   description TEXT,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT chk_business_settings_singleton CHECK (id = 1)

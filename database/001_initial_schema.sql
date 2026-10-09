@@ -102,6 +102,9 @@ CREATE TABLE appointments (
   starts_at DATETIME NOT NULL,
   ends_at DATETIME NOT NULL,
   status ENUM('PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED', 'NO_SHOW') NOT NULL DEFAULT 'PENDING',
+  payment_reference CHAR(36) NULL,
+  payment_proof_url VARCHAR(2048) NULL,
+  payment_amount DECIMAL(10,2) NULL,
   cancellation_reason VARCHAR(255),
   admin_notes TEXT NULL,
   cancelled_at DATETIME NULL,
@@ -115,7 +118,8 @@ CREATE TABLE appointments (
   CONSTRAINT fk_appointments_updated_by FOREIGN KEY (updated_by) REFERENCES users (id),
   CONSTRAINT chk_appointments_range CHECK (starts_at < ends_at),
   INDEX idx_appointments_barber_range (barber_id, starts_at, ends_at),
-  INDEX idx_appointments_client_history (client_id, starts_at)
+  INDEX idx_appointments_client_history (client_id, starts_at),
+  INDEX idx_appointments_payment_reference (payment_reference)
 );
 
 CREATE TABLE notifications (
@@ -161,6 +165,7 @@ CREATE TABLE business_settings (
   maps_url VARCHAR(2048),
   instagram_url VARCHAR(2048),
   facebook_url VARCHAR(2048),
+  payment_qr_url VARCHAR(2048),
   description TEXT,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   CONSTRAINT chk_business_settings_singleton CHECK (id = 1)

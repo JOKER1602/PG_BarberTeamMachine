@@ -1,4 +1,5 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import pool from '../config/database.js';
 import { isSlotAvailable } from '../domain/availability.js';
@@ -10,7 +11,8 @@ const router = Router();
 const bookingSchema = z.object({
   barberId: z.coerce.number().int().positive(),
   serviceId: z.coerce.number().int().positive(),
-  startsAt: z.string().datetime({ offset: true })
+  startsAt: z.string().datetime({ offset: true }),
+  paymentProofUrl: z.string().url()
 });
 const availabilitySchema = z.object({
   barberId: z.coerce.number().int().positive(),
@@ -21,7 +23,8 @@ const availabilitySchema = z.object({
 const multiBookingSchema = z.object({
   barberId: z.coerce.number().int().positive(),
   serviceIds: z.array(z.coerce.number().int().positive()).min(1).max(10),
-  startsAt: z.string().datetime({ offset: true })
+  startsAt: z.string().datetime({ offset: true }),
+  paymentProofUrl: z.string().url()
 });
 const activeStatuses = ['PENDING', 'CONFIRMED'];
 
@@ -37,7 +40,7 @@ async function acquireBarberLock(connection, barberId) {
 async function loadAvailability(connection, barberId, serviceId, startAt, endAt) {
   const weekday = zonedParts(startAt).weekday;
   const [serviceRows] = await connection.execute(
-    `SELECT s.id, s.duration_minutes AS durationMinutes
+    `SELECT s.id, s.duration_minutes AS durationMinutes, s.price
      FROM services s JOIN barber_services bs ON bs.service_id = s.id
      WHERE s.id = ? AND s.is_active = TRUE AND bs.barber_id = ?`,
     [serviceId, barberId]
@@ -73,7 +76,7 @@ async function loadMultiAvailability(connection, barberId, serviceIds, startAt, 
   if (!base.service) return { ...base, services: null, durationMinutes: 0 };
   const placeholders = uniqueServiceIds.map(() => '?').join(', ');
   const [services] = await connection.execute(
-    `SELECT s.id, s.duration_minutes AS durationMinutes
+    `SELECT s.id, s.duration_minutes AS durationMinutes, s.price
      FROM services s JOIN barber_services bs ON bs.service_id = s.id
      WHERE s.id IN (${placeholders}) AND s.is_active = TRUE AND bs.barber_id = ?`,
     [...uniqueServiceIds, barberId]
@@ -127,7 +130,7 @@ router.post('/multi', async (request, response, next) => {
   if (!parsed.success) return response.status(400).json({ message: 'Datos de las citas invalidos', errors: parsed.error.flatten() });
   const connection = await pool.getConnection();
   try {
-    const { barberId, startsAt } = parsed.data;
+    const { barberId, startsAt, paymentProofUrl } = parsed.data;
     const serviceIds = [...new Set(parsed.data.serviceIds)];
     const startAt = new Date(startsAt);
     await connection.beginTransaction();
@@ -148,24 +151,25 @@ router.post('/multi', async (request, response, next) => {
       await connection.rollback();
       return response.status(409).json({ message: `Horario no disponible: ${result.reason}` });
     }
+    const totalAmount = finalAvailability.services.reduce((total, service) => total + Number(service.price ?? 0), 0);
+    const paymentReference = randomUUID();
     const ids = [];
     let serviceStart = startAt;
     for (const service of finalAvailability.services) {
       const serviceEnd = new Date(serviceStart.getTime() + service.durationMinutes * 60_000);
       const [created] = await connection.execute(
-        `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, updated_by) VALUES (?, ?, ?, ?, ?, 'CONFIRMED', ?)`,
-        [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), request.auth.sub]
+        `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, payment_reference, payment_proof_url, payment_amount, updated_by) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)`,
+        [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), paymentReference, paymentProofUrl, totalAmount, request.auth.sub]
       );
       ids.push(created.insertId);
-      await scheduleAppointmentReminders(connection, created.insertId);
       serviceStart = serviceEnd;
     }
     await connection.execute(
-      `INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, 'APPOINTMENT_CONFIRMED', 'Cita confirmada', ?)`,
-      [request.auth.sub, ids[0], `Tu cita para ${finalAvailability.services.length} servicio(s) fue confirmada automáticamente`]
+      `INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, 'PAYMENT_PENDING', 'Pago pendiente de revisión', ?)`,
+      [request.auth.sub, ids[0], `Recibimos tu comprobante por Bs ${totalAmount.toFixed(2)}. Confirmaremos tu cita cuando el pago sea revisado.`]
     );
     await connection.commit();
-    return response.status(201).json({ ids, status: 'CONFIRMED' });
+    return response.status(201).json({ ids, paymentReference, status: 'PENDING' });
   } catch (error) {
     await connection.rollback();
     return next(error);
@@ -236,7 +240,7 @@ router.get('/mine', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
             `SELECT a.id, a.barber_id AS barberId, a.service_id AS serviceId,
-              a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt,
+              a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.payment_reference AS paymentReference, a.payment_amount AS paymentAmount, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt,
               s.name AS serviceName, s.price AS price, b.display_name AS barberName, b.photo_url AS barberPhotoUrl,
               r.id AS reviewId, r.rating AS reviewRating
        FROM appointments a
@@ -268,7 +272,7 @@ router.get('/admin', requireRole('ADMINISTRADOR'), async (request, response, nex
   try {
     const [rows] = await pool.execute(
       `SELECT a.id, a.client_id AS clientId, a.barber_id AS barberId, a.service_id AS serviceId,
-       a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancellation_reason AS cancellationReason,
+       a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancellation_reason AS cancellationReason, a.payment_reference AS paymentReference, a.payment_proof_url AS paymentProofUrl, a.payment_amount AS paymentAmount,
        a.admin_notes AS adminNotes, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt, a.updated_by AS updatedBy,
        s.name AS serviceName, b.display_name AS barberName,
        CONCAT(u.first_name, ' ', u.last_name) AS clientName
@@ -292,7 +296,7 @@ router.patch('/:id/reschedule', async (request, response, next) => {
   try {
     await connection.beginTransaction();
     const [appointmentRows] = await connection.execute(
-      `SELECT id, client_id AS clientId, barber_id AS barberId, service_id AS serviceId
+      `SELECT id, client_id AS clientId, barber_id AS barberId, service_id AS serviceId, status
        FROM appointments WHERE id = ? AND (client_id = ? OR ? = 'ADMINISTRADOR')
        AND status IN ('PENDING', 'CONFIRMED')`,
       [id.data, request.auth.sub, request.auth.role]
@@ -322,19 +326,20 @@ router.patch('/:id/reschedule', async (request, response, next) => {
       return response.status(409).json({ message: `Nuevo horario no disponible: ${result.reason}` });
     }
 
+    const nextStatus = appointmentRows[0].status === 'PENDING' ? 'PENDING' : 'CONFIRMED';
     await connection.execute(
-      `UPDATE appointments SET starts_at = ?, ends_at = ?, status = 'CONFIRMED', updated_by = ? WHERE id = ?`,
-      [sqlDateTime(startAt), sqlDateTime(endAt), request.auth.sub, id.data]
+      `UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?, updated_by = ? WHERE id = ?`,
+      [sqlDateTime(startAt), sqlDateTime(endAt), nextStatus, request.auth.sub, id.data]
     );
     await cancelAppointmentReminders(connection, id.data);
-    await scheduleAppointmentReminders(connection, id.data);
+    if (nextStatus === 'CONFIRMED') await scheduleAppointmentReminders(connection, id.data);
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
-       VALUES (?, ?, 'APPOINTMENT_RESCHEDULED', 'Cita reprogramada', 'Tu nueva fecha fue confirmada automáticamente')`,
-      [appointmentRows[0].clientId, id.data]
+       VALUES (?, ?, 'APPOINTMENT_RESCHEDULED', 'Cita reprogramada', ?)`,
+      [appointmentRows[0].clientId, id.data, nextStatus === 'CONFIRMED' ? 'Tu nueva fecha fue confirmada automáticamente' : 'Tu nueva fecha sigue pendiente de revisión de pago']
     );
     await connection.commit();
-    return response.json({ message: 'Cita reprogramada y confirmada', status: 'CONFIRMED' });
+    return response.json({ message: nextStatus === 'CONFIRMED' ? 'Cita reprogramada y confirmada' : 'Cita reprogramada; el pago sigue pendiente de revisión', status: nextStatus });
   } catch (error) {
     await connection.rollback();
     return next(error);
@@ -385,21 +390,33 @@ router.patch('/:id/status', requireRole('ADMINISTRADOR'), async (request, respon
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    const [rows] = await connection.execute("SELECT client_id FROM appointments WHERE id = ? AND status IN ('PENDING', 'CONFIRMED')", [id.data]);
+    const [rows] = await connection.execute("SELECT client_id AS clientId, status, payment_reference AS paymentReference FROM appointments WHERE id = ? AND status IN ('PENDING', 'CONFIRMED')", [id.data]);
     if (!rows.length) { await connection.rollback(); return response.status(404).json({ message: 'Cita no encontrada o no actualizable' }); }
+    if (rows[0].status === 'PENDING' && rows[0].paymentReference && !['CONFIRMED', 'CANCELLED'].includes(parsed.data.status)) {
+      await connection.rollback();
+      return response.status(400).json({ message: 'Primero aprueba o rechaza el pago antes de cambiar esta cita.' });
+    }
+    const groupCondition = parsed.data.status === 'CONFIRMED' && rows[0].paymentReference ? 'payment_reference = ? AND status = \'PENDING\'' : 'id = ?';
+    const groupValue = parsed.data.status === 'CONFIRMED' && rows[0].paymentReference ? rows[0].paymentReference : id.data;
     await connection.execute(
       `UPDATE appointments
        SET status = ?, cancellation_reason = ?,
            cancelled_at = CASE WHEN ? = 'CANCELLED' THEN UTC_TIMESTAMP() ELSE cancelled_at END,
            completed_at = CASE WHEN ? = 'COMPLETED' THEN UTC_TIMESTAMP() ELSE completed_at END,
            updated_by = ?
-       WHERE id = ?`,
-      [parsed.data.status, parsed.data.status === 'CANCELLED' ? parsed.data.reason ?? null : null, parsed.data.status, parsed.data.status, request.auth.sub, id.data]
+       WHERE ${groupCondition}`,
+      [parsed.data.status, parsed.data.status === 'CANCELLED' ? parsed.data.reason ?? null : null, parsed.data.status, parsed.data.status, request.auth.sub, groupValue]
     );
-    if (parsed.data.status === 'CONFIRMED') await scheduleAppointmentReminders(connection, id.data);
+    if (parsed.data.status === 'CONFIRMED') {
+      const [confirmed] = await connection.execute(`SELECT id, client_id AS clientId FROM appointments WHERE ${rows[0].paymentReference ? 'payment_reference = ?' : 'id = ?'}`, [groupValue]);
+      for (const appointment of confirmed) {
+        await scheduleAppointmentReminders(connection, appointment.id);
+        await connection.execute('INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, ?, ?, ?)', [appointment.clientId, appointment.id, 'APPOINTMENT_CONFIRMED', 'Pago aprobado · cita confirmada', 'Tu pago fue aprobado y tu cita quedó confirmada.']);
+      }
+    }
     if (['CANCELLED', 'COMPLETED', 'NO_SHOW'].includes(parsed.data.status)) await cancelAppointmentReminders(connection, id.data);
-    const messages = { CONFIRMED: ['Cita confirmada', 'Tu cita fue confirmada'], COMPLETED: ['Cita atendida', 'Tu cita fue marcada como atendida'], NO_SHOW: ['Inasistencia registrada', 'Tu cita fue marcada como no asistida'], CANCELLED: ['Cita cancelada', 'Tu cita fue cancelada'] };
-    await connection.execute('INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, ?, ?, ?)', [rows[0].client_id, id.data, `APPOINTMENT_${parsed.data.status}`, messages[parsed.data.status][0], messages[parsed.data.status][1]]);
+    const messages = { COMPLETED: ['Cita atendida', 'Tu cita fue marcada como atendida'], NO_SHOW: ['Inasistencia registrada', 'Tu cita fue marcada como no asistida'], CANCELLED: ['Cita cancelada', 'Tu cita fue cancelada'] };
+    if (parsed.data.status !== 'CONFIRMED') await connection.execute('INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, ?, ?, ?)', [rows[0].clientId, id.data, `APPOINTMENT_${parsed.data.status}`, messages[parsed.data.status][0], messages[parsed.data.status][1]]);
     await connection.commit();
     return response.json({ message: 'Estado de cita actualizado' });
   } catch (error) { await connection.rollback(); return next(error); } finally { connection.release(); }
