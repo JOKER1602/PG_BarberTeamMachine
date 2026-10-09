@@ -3,13 +3,7 @@ const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3002/api';
 function expireStoredSession(path, token) {
   if (!token || path.startsWith('/auth/login') || path.startsWith('/auth/register')) return;
   clearSession();
-  const currentPath = window.location.pathname;
-  const destination = currentPath === '/admin'
-    ? '/admin?session=expired'
-    : currentPath === '/barbero'
-      ? '/admin?session=expired'
-      : '/reservar/cita?session=expired';
-  window.location.replace(destination);
+  window.location.replace('/?login=1&session=expired');
 }
 
 async function request(path, options = {}) {

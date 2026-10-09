@@ -3,8 +3,9 @@ import { api, clearSession, saveSession } from './api.js';
 
 const weekdays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
-function Landing({ servicesCount, barbersCount, settings, onReserve, session }) {
+function Landing({ servicesCount, barbersCount, settings, onReserve, session, initialLogin = false }) {
   const business = settings ?? { businessName: 'Barber Team Machine', address: 'Buenos Aires 130', city: 'Cochabamba', country: 'Bolivia', phone: '77469963', hoursText: 'Lunes a sábado · 10:00 AM — 7:00 PM', mapsUrl: 'https://maps.app.goo.gl/At4qrWe6P2KrDCyW9', description: 'Precisión, técnica y estilo para cada visita.' };
+  const [showLogin, setShowLogin] = useState(initialLogin);
   useEffect(() => {
     const items = document.querySelectorAll('.reveal-on-scroll');
     const observer = new IntersectionObserver((entries) => entries.forEach((entry) => {
@@ -13,9 +14,9 @@ function Landing({ servicesCount, barbersCount, settings, onReserve, session }) 
     items.forEach((item) => observer.observe(item));
     return () => observer.disconnect();
   }, []);
+  const roleDestination = session?.role === 'ADMINISTRADOR' ? '/admin' : session?.role === 'BARBERO' ? '/barbero' : '/mi-cuenta?tab=historial';
   return <>
-    <a className="public-admin-access" href="/admin">Acceso del equipo</a>
-    <nav className="home-nav" aria-label="Navegación principal"><div><a className="brand-mark" href="#inicio">BTM<span>.</span></a><div className="home-nav-links"><a href="#nosotros">Nosotros</a><a href="#servicios">Servicios</a><a href="#ubicacion">Ubicación</a><a href="#reservas">Reservar</a></div><a className="home-client-access" href={session?.role === 'CLIENTE' ? '/mi-cuenta?tab=historial' : '/reservar/cita?login=1'}>{session?.role === 'CLIENTE' ? 'Mis citas' : 'Iniciar sesión'} <span>↗</span></a></div></nav>
+    <nav className="home-nav" aria-label="Navegación principal"><div><a className="brand-mark" href="#inicio">BTM<span>.</span></a><div className="home-nav-links"><a href="#nosotros">Nosotros</a><a href="#servicios">Servicios</a><a href="#ubicacion">Ubicación</a><a href="#reservas">Reservar</a></div>{session ? <a className="home-client-access" href={roleDestination}>{session.role === 'CLIENTE' ? 'Mis citas' : 'Mi panel'} <span>↗</span></a> : <button className="home-client-access" type="button" onClick={() => setShowLogin(true)}>Iniciar sesión <span>↗</span></button>}</div></nav>
     <section className="landing-hero" id="inicio">
       <div className="hero-copy"><p className="hero-kicker">Barbería · Cochabamba</p><h1>PRECISIÓN<br/>PARA TU<br/><em>MEJOR ESTILO.</em></h1><p>Todo lo que necesitas para salir con una imagen cuidada: corte, barba y cejas, atendidos con técnica y atención al detalle.</p><div className="hero-actions"><button className="hero-cta" onClick={onReserve}>Reserva tu cita <span>↗</span></button><a className="secondary-home-cta" href="#nosotros">Conócenos ↓</a></div></div>
       <div className="hero-side"><div><strong>{servicesCount || '—'}</strong><span>Servicios</span></div><i/><div><strong>{barbersCount || '—'}</strong><span>Barberos</span></div><i/><div><strong>6/7</strong><span>Días abiertos</span></div></div>
@@ -25,9 +26,28 @@ function Landing({ servicesCount, barbersCount, settings, onReserve, session }) 
     <section className="manifesto-section" id="nosotros"><div className="manifesto-title reveal-on-scroll"><p className="section-label">Nosotros</p><h2>NO ES SOLO<br/>UN CORTE.<br/><em>ES TU EXPERIENCIA.</em></h2></div><aside className="monogram-panel reveal-on-scroll"><span>BTM</span><p>{business.businessName}<br/>{business.city}, {business.country}<br/><br/>Corte · Barba · Cejas</p></aside><div className="manifesto-copy reveal-on-scroll"><p className="lead-copy"><strong>{business.businessName}</strong> es un espacio para hombres que entienden que cuidarse es una forma de mostrarse seguros.</p><p>{business.description}</p><p className="manifesto-quote">“Tu estilo habla antes que las palabras.”</p><div className="home-numbers"><div><b>{servicesCount || '—'}</b><span>Servicios</span></div><div><b>{barbersCount || '—'}</b><span>Barberos</span></div><div><b>6/7</b><span>Días abiertos</span></div><div><b>10AM</b><span>Apertura</span></div></div></div></section>
     <section className="value-strip" id="servicios"><article className="reveal-on-scroll"><b>01</b><h3>Obsesión por el detalle</h3><p>Cada corte, cada barba y cada perfilado se ejecuta con precisión y cuidado.</p></article><article className="reveal-on-scroll"><b>02</b><h3>Experiencia clara</h3><p>Un servicio directo, una agenda ordenada y tiempo bien aprovechado.</p></article><article className="reveal-on-scroll"><b>03</b><h3>Tu mejor versión</h3><p>Atención personalizada para que tu imagen transmita exactamente lo que buscas.</p></article></section>
     <section className="booking-invite" id="reservas"><div className="reveal-on-scroll"><p className="section-label">Agenda tu cita</p><h2>NUESTRO MENÚ<br/><em>EN LÍNEA.</em></h2><p>{servicesCount ? `Consulta los ${servicesCount} servicios disponibles, conoce al equipo y elige el horario que mejor se adapte a tu día.` : 'Conoce nuestros servicios y reserva en línea.'}</p><div className="hero-actions booking-actions"><button className="hero-cta" onClick={onReserve}>Reservar en BTM <span>↗</span></button><a className="secondary-home-cta" href="tel:+59177469963">Llamar ahora ↗</a></div></div></section>
-    <section className="location-section" id="ubicacion"><div className="reveal-on-scroll"><p className="section-label">Encuéntranos</p><h2>VISÍTANOS EN<br/><em>{business.city.toUpperCase()}.</em></h2></div><div className="location-content reveal-on-scroll"><iframe title={`Ubicación de ${business.businessName}`} src={`https://maps.google.com/maps?q=${encodeURIComponent(`${business.address}, ${business.city}, ${business.country}`)}&z=16&output=embed`} loading="lazy"/><div className="location-details"><article><b>Dirección</b><p>{business.address}<br/>{business.city}, {business.country}</p></article><article><b>Horario</b><p>{business.hoursText}</p></article><article><b>Contacto</b><p>+591 {business.phone}<br/><a href={business.mapsUrl} target="_blank" rel="noreferrer">Cómo llegar ↗</a></p></article></div><div className="location-actions"><a className="hero-cta" href={business.mapsUrl} target="_blank" rel="noreferrer">Cómo llegar <span>↗</span></a><button className="outline-link" onClick={onReserve}>Reservar cita <span>↗</span></button></div></div><p className="closing-line reveal-on-scroll">Tu próximo buen corte está a una cita de distancia.</p></section>
+    <section className="location-section" id="ubicacion"><div className="reveal-on-scroll"><p className="section-label">Encuéntranos</p><h2>VISÍTANOS EN<br/><em>{business.city.toUpperCase()}.</em></h2></div><div className="location-content reveal-on-scroll"><iframe title={`Ubicación de ${business.businessName}`} src={`https://maps.google.com/maps?q=${encodeURIComponent(`${business.address}, ${business.city}, ${business.country}`)}&z=16&output=embed`} loading="lazy"/><div className="location-details"><article><b>Dirección</b><p>{business.address}<br/>{business.city}, {business.country}</p></article><article><b>Horario</b><p>{business.hoursText}</p></article><article><b>Contacto</b><p>+591 {business.phone}<br/><a href={business.mapsUrl} target="_blank" rel="noreferrer">Cómo llegar ↗</a></p></article></div><div className="location-actions"><a className="hero-cta" href={business.mapsUrl} target="_blank" rel="noreferrer">Cómo llegar <span>↗</span></a><button className="hero-cta" onClick={onReserve}>Reservar cita <span>↗</span></button></div></div><p className="closing-line reveal-on-scroll">Tu próximo buen corte está a una cita de distancia.</p></section>
     <footer className="home-footer"><div className="reveal-on-scroll"><a className="brand-mark" href="#inicio">BTM<span>.</span></a><p>{business.description}</p></div><div className="reveal-on-scroll"><b>Navegación</b><a href="#nosotros">Nosotros</a><a href="#ubicacion">Ubicación</a><a href="#reservas">Reservar</a></div><div className="reveal-on-scroll"><b>Servicios</b><a href="#servicios">Corte normal</a><a href="#servicios">Perfilado de barba</a><a href="#servicios">Perfilado de cejas</a></div><div className="reveal-on-scroll"><b>Contacto</b><span>{business.address}</span><span>{business.city}, {business.country}</span><a href={`tel:+591${business.phone}`}>+591 {business.phone}</a></div><small className="reveal-on-scroll">© 2026 {business.businessName}. Todos los derechos reservados.</small></footer>
+    {showLogin && <UnifiedLoginModal onClose={() => setShowLogin(false)}/>}
   </>;
+}
+
+function UnifiedLoginModal({ onClose }) {
+  const [form, setForm] = useState({ email: '', password: '' });
+  const [error, setError] = useState('');
+  const [loading, setLoading] = useState(false);
+  async function submit(event) {
+    event.preventDefault();
+    setError(''); setLoading(true);
+    try {
+      const result = await api.login(form);
+      saveSession(result);
+      const destination = result.user.role === 'ADMINISTRADOR' ? '/admin' : result.user.role === 'BARBERO' ? '/barbero' : '/mi-cuenta?tab=historial';
+      window.location.assign(destination);
+    } catch (requestError) { setError(requestError.message); }
+    finally { setLoading(false); }
+  }
+  return <div className="home-login-backdrop" role="dialog" aria-modal="true" aria-label="Iniciar sesión"><section className="home-login-modal"><button className="modal-close" type="button" onClick={onClose} aria-label="Cerrar">×</button><p className="section-label">Acceso</p><h2>Inicia sesión</h2><p>Usa el correo y la contraseña de tu cuenta. El sistema abrirá automáticamente tu espacio correspondiente.</p><form onSubmit={submit}><label>Correo electrónico<input type="email" required autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })}/></label><label>Contraseña<input type="password" minLength="8" required autoComplete="current-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })}/></label>{error && <p className="home-login-error">{error}</p>}<button className="hero-cta" disabled={loading}>{loading ? 'Ingresando...' : 'Continuar'} <span>↗</span></button></form><a className="home-login-recovery" href="/recuperar-contrasena">¿Olvidaste tu contraseña?</a></section></div>;
 }
 
 function PasswordRecoveryPage() {
@@ -422,7 +442,7 @@ function ReservationWizard() {
   </main>;
 }
 
-function BookingPage() {
+function BookingPage({ onBackHome }) {
   const [services, setServices] = useState([]); const [barbers, setBarbers] = useState([]); const [reviewsData, setReviewsData] = useState({ summary: { total: 0, average: 0, five: 0, four: 0, three: 0, two: 0, one: 0 }, reviews: [] }); const [settings, setSettings] = useState(null); const [session, setSession] = useState(() => JSON.parse(localStorage.getItem('btm_user') ?? 'null'));
   const [selection, setSelection] = useState({ serviceId: '', barberId: '', date: '' }); const [slots, setSlots] = useState([]); const [authMode, setAuthMode] = useState('login'); const [authForm, setAuthForm] = useState({ email: '', password: '', firstName: '', lastName: '' }); const [notice, setNotice] = useState(''); const [error, setError] = useState(''); const [serviceQuery, setServiceQuery] = useState(''); const [serviceFilter, setServiceFilter] = useState('all'); const [pendingClientNotes, setPendingClientNotes] = useState(() => sessionStorage.getItem('btm_pending_client_notes') ?? '');
   useEffect(() => { Promise.all([api.services(), api.barbers(), api.businessSettings(), api.reviews()]).then(([s, b, configuration, reviews]) => { setServices(s.services); setBarbers(b.barbers); setSettings(configuration.settings); setReviewsData(reviews); }).catch((e) => setError(e.message)); }, []);
@@ -434,7 +454,7 @@ function BookingPage() {
   const business = settings ?? { businessName: 'Barber Team Machine', address: 'Buenos Aires 130', city: 'Cochabamba', country: 'Bolivia', phone: '77469963', hoursText: 'Lunes a sábado · 10:00 AM — 7:00 PM', mapsUrl: 'https://maps.app.goo.gl/At4qrWe6P2KrDCyW9' };
   const reviewSummary = reviewsData.summary ?? { total: 0, average: 0, five: 0, four: 0, three: 0, two: 0, one: 0 };
   const maxReviewsInTier = Math.max(1, Number(reviewSummary.five ?? 0), Number(reviewSummary.four ?? 0), Number(reviewSummary.three ?? 0), Number(reviewSummary.two ?? 0), Number(reviewSummary.one ?? 0));
-  return <main className="booking-page booking-experience"><header className="booking-topbar"><a className="brand-mark" href="/">BTM<span>.</span></a><div>{session ? <button className="booking-login" onClick={() => { clearSession(); setSession(null); }}>Cerrar sesión</button> : <a className="booking-login" href="/reservar/cita">Iniciar sesión</a>}</div></header>
+  return <main className="booking-page booking-experience"><header className="booking-topbar">{onBackHome ? <button className="booking-home-return" type="button" onClick={onBackHome}>← Inicio</button> : <a className="brand-mark" href="/">BTM<span>.</span></a>}<div>{session ? <button className="booking-login" onClick={() => { clearSession(); setSession(null); }}>Cerrar sesión</button> : <a className="booking-login" href="/?login=1">Iniciar sesión</a>}</div></header>
     <section className="booking-hero"><div className="booking-hero-mark">BTM<span>.</span></div><div className="booking-profile"><h1>{business.businessName}</h1><div><span>Barbería</span><span>{business.city}</span></div><p>★ Atención profesional <i>•</i> {business.address}, {business.city}</p><p>◷ Abierto: {business.hoursText}</p></div></section>
     <div className="booking-layout">{error && <p className="booking-notice error">{error}</p>}{notice && <p className="booking-notice success">{notice}</p>}<nav className="booking-tabs"><a href="#servicios">Servicios</a><a href="#equipo">Equipo</a><a href="/reservar/cita">Reservar</a></nav>
       <section className="booking-about"><div><h2>Sobre nosotros</h2><div className="booking-tags"><span>Barbería</span><span>Corte y estilo</span><span>Atención personalizada</span></div><p>Precisión, técnica y estilo para acompañarte en cada visita. Elige un servicio y reserva tu horario en línea.</p></div><aside><b>⌖ &nbsp; Dirección</b><p>{business.address}<br/>{business.city}, {business.country}</p><a href={business.mapsUrl} target="_blank" rel="noreferrer">Ver dirección ↗</a><b>◷ &nbsp; Horario</b><p>{business.hoursText}</p></aside></section>
@@ -562,7 +582,8 @@ function AdminPortal() {
 
   useEffect(() => {
     if (session?.role === 'BARBERO') window.location.replace('/barbero');
-  }, [session]);
+    else if (!isAdmin) window.location.replace('/?login=1');
+  }, [session, isAdmin]);
 
   async function login(event) {
     event.preventDefault();
@@ -581,21 +602,13 @@ function AdminPortal() {
     }
   }
 
-  if (!isAdmin) return <main className="admin-login-page">
+  if (!isAdmin && session?.role !== 'BARBERO') return <main className="admin-login-page">
     <a className="admin-login-brand" href="/">BTM<span>.</span></a>
     <section>
-      <p className="section-label">Acceso del equipo</p>
-      <h1>Administración y barberos</h1>
-      <p>Un solo ingreso para el personal. Según tu rol, el sistema abrirá el panel administrativo o tu agenda de barbero.</p>
-      {session?.role === 'CLIENTE' && <p className="admin-login-warning">Hay una sesión de cliente activa. Las cuentas de cliente solo ingresan durante la reserva.</p>}
-      {error && <p className="admin-login-error">{error}</p>}
-      <form onSubmit={login}>
-        <label>Correo electrónico<input type="email" required autoComplete="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })}/></label>
-        <label>Contraseña<input type="password" required minLength="8" autoComplete="current-password" value={form.password} onChange={(event) => setForm({ ...form, password: event.target.value })}/></label>
-        <button>Ingresar</button>
-      </form>
-      <a className="admin-recovery-link" href="/recuperar-contrasena">¿Olvidaste tu contraseña?</a>
-      <a className="admin-back-home" href="/">← Volver al sitio público</a>
+      <p className="section-label">Acceso único</p>
+      <h1>Inicia sesión desde el encabezado</h1>
+      <p>El acceso se realiza desde el botón «Iniciar sesión» de la página principal. Según tus credenciales, se abrirá automáticamente el panel correcto.</p>
+      <a className="admin-back-home" href="/?login=1">Ir al inicio de sesión →</a>
     </section>
   </main>;
 
@@ -638,13 +651,13 @@ function BarberPortal() {
 
   useEffect(() => {
     if (!isBarber) {
-      window.location.replace('/admin');
+      window.location.replace('/?login=1');
       return;
     }
     api.barberDashboard().then(setDashboard).catch((requestError) => setError(requestError.message));
   }, [isBarber]);
 
-  if (!isBarber) return <main className="admin-login-page"><a className="admin-login-brand" href="/">BTM<span>.</span></a><section><p className="section-label">Acceso del equipo</p><h1>Redirigiendo al acceso</h1><p>El inicio de sesión del personal se realiza desde un único formulario.</p><a className="admin-back-home" href="/admin">Ir al acceso del equipo →</a></section></main>;
+  if (!isBarber) return <main className="admin-login-page"><a className="admin-login-brand" href="/">BTM<span>.</span></a><section><p className="section-label">Acceso único</p><h1>Redirigiendo al inicio de sesión</h1><p>Usa el botón «Iniciar sesión» del encabezado. El sistema abrirá tu agenda si tu cuenta es de barbero.</p><a className="admin-back-home" href="/?login=1">Ir al inicio de sesión →</a></section></main>;
 
   const appointments = dashboard?.appointments ?? [];
   const now = new Date();
@@ -843,7 +856,7 @@ function App() {
   if (window.location.pathname === '/mi-cuenta') return <ClientArea />;
   if (window.location.pathname === '/admin') return <AdminPortal />;
   if (window.location.pathname === '/barbero') return <BarberPortal />;
-  const [services, setServices] = useState([]); const [barbers, setBarbers] = useState([]); const [settings, setSettings] = useState(null); const [session, setSession] = useState(() => JSON.parse(localStorage.getItem('btm_user') ?? 'null'));
+  const [services, setServices] = useState([]); const [barbers, setBarbers] = useState([]); const [settings, setSettings] = useState(null); const [session, setSession] = useState(() => JSON.parse(localStorage.getItem('btm_user') ?? 'null')); const [homeView, setHomeView] = useState('landing');
   const [appointments, setAppointments] = useState([]); const [notifications, setNotifications] = useState([]); const [selection, setSelection] = useState({ serviceId: '', barberId: '', date: '' }); const [slots, setSlots] = useState([]); const [reschedulingId, setReschedulingId] = useState(null);
   const [authMode, setAuthMode] = useState('login'); const [authForm, setAuthForm] = useState({ email: '', password: '', firstName: '', lastName: '' }); const [message, setMessage] = useState(''); const [error, setError] = useState('');
   const loadCatalog = async () => { const [s, b, configuration] = await Promise.all([api.services(), api.barbers(), api.businessSettings()]); setServices(s.services); setBarbers(b.barbers); setSettings(configuration.settings); };
@@ -852,8 +865,10 @@ function App() {
   async function authenticate(e) { e.preventDefault(); try { const result = authMode === 'login' ? await api.login(authForm) : await api.register(authForm); saveSession(result); setSession(result.user); setMessage('Sesión iniciada correctamente.'); } catch (error) { setError(error.message); } }
   async function loadSlots() { try { setSlots((await api.availability(selection.barberId, selection.serviceId, selection.date)).slots); } catch (e) { setError(e.message); } }
   async function book(slot) { try { if (reschedulingId) { await api.rescheduleAppointment(reschedulingId, slot.startsAt); setReschedulingId(null); setMessage('Reprogramación confirmada automáticamente.'); } else { await api.createAppointment({ barberId: selection.barberId, serviceId: selection.serviceId, startsAt: slot.startsAt }); setMessage('Cita confirmada automáticamente.'); } setAppointments((await api.appointments()).appointments); setSlots((items) => items.filter((item) => item.startsAt !== slot.startsAt)); } catch (e) { setError(e.message); } }
-  const goToBooking = () => window.open('/reservar', '_blank', 'noopener');
-  return <main className="app-shell"><Landing servicesCount={services.length} barbersCount={barbers.length} settings={settings} onReserve={goToBooking} session={session}/></main>;
+  const goToBooking = () => { setHomeView('booking'); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const returnHome = () => { setHomeView('landing'); window.scrollTo({ top: 0, behavior: 'smooth' }); };
+  const initialLogin = new URLSearchParams(window.location.search).get('login') === '1';
+  return <main className="app-shell">{homeView === 'booking' ? <BookingPage onBackHome={returnHome}/> : <Landing servicesCount={services.length} barbersCount={barbers.length} settings={settings} onReserve={goToBooking} session={session} initialLogin={initialLogin}/>}</main>;
 }
 
 export default App;
