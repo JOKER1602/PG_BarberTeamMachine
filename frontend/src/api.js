@@ -41,6 +41,7 @@ export const api = {
   health: () => request('/health'),
   businessSettings: () => request('/settings'),
   reviews: () => request('/reviews'),
+  createReview: (body) => request('/reviews', { method: 'POST', body: JSON.stringify(body) }),
   updateBusinessSettings: (body) => request('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
   services: () => request('/services'),
   serviceCategories: () => request('/services/categories'),

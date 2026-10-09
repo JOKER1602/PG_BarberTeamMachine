@@ -1,5 +1,7 @@
 import { Router } from 'express';
+import { z } from 'zod';
 import pool from '../config/database.js';
+import { requireAuth } from '../middleware/auth.js';
 
 const router = Router();
 
@@ -20,6 +22,39 @@ router.get('/', async (_request, response, next) => {
        WHERE r.is_visible = TRUE ORDER BY r.created_at DESC LIMIT 6`
     );
     return response.json({ summary, reviews });
+  } catch (error) { return next(error); }
+});
+
+const createReviewSchema = z.object({
+  appointmentId: z.coerce.number().int().positive(),
+  rating: z.coerce.number().int().min(1).max(5),
+  comment: z.string().trim().max(1500).optional().default('')
+});
+
+router.post('/', requireAuth, async (request, response, next) => {
+  const parsed = createReviewSchema.safeParse(request.body);
+  if (!parsed.success) return response.status(400).json({ message: 'Datos de la reseña inválidos.' });
+
+  try {
+    const { appointmentId, rating, comment } = parsed.data;
+    const [[appointment]] = await pool.execute(
+      `SELECT id, barber_id AS barberId, status
+       FROM appointments WHERE id = ? AND client_id = ?`,
+      [appointmentId, request.auth.sub]
+    );
+    if (!appointment) return response.status(404).json({ message: 'No encontramos esa cita.' });
+    if (appointment.status !== 'COMPLETED') {
+      return response.status(400).json({ message: 'Podrás dejar una reseña cuando la cita figure como atendida.' });
+    }
+    const [[existing]] = await pool.execute('SELECT id FROM reviews WHERE appointment_id = ?', [appointmentId]);
+    if (existing) return response.status(409).json({ message: 'Ya enviaste una reseña para esta cita.' });
+
+    const [created] = await pool.execute(
+      `INSERT INTO reviews (client_id, appointment_id, barber_id, rating, comment)
+       VALUES (?, ?, ?, ?, ?)`,
+      [request.auth.sub, appointmentId, appointment.barberId, rating, comment]
+    );
+    return response.status(201).json({ review: { id: created.insertId, appointmentId, rating, comment } });
   } catch (error) { return next(error); }
 });
 

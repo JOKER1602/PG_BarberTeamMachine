@@ -21,8 +21,7 @@ const availabilitySchema = z.object({
 const multiBookingSchema = z.object({
   barberId: z.coerce.number().int().positive(),
   serviceIds: z.array(z.coerce.number().int().positive()).min(1).max(10),
-  startsAt: z.string().datetime({ offset: true }),
-  clientNotes: z.string().trim().max(1500).nullable().optional()
+  startsAt: z.string().datetime({ offset: true })
 });
 const activeStatuses = ['PENDING', 'CONFIRMED'];
 
@@ -128,7 +127,7 @@ router.post('/multi', async (request, response, next) => {
   if (!parsed.success) return response.status(400).json({ message: 'Datos de las citas invalidos', errors: parsed.error.flatten() });
   const connection = await pool.getConnection();
   try {
-    const { barberId, startsAt, clientNotes } = parsed.data;
+    const { barberId, startsAt } = parsed.data;
     const serviceIds = [...new Set(parsed.data.serviceIds)];
     const startAt = new Date(startsAt);
     await connection.beginTransaction();
@@ -154,8 +153,8 @@ router.post('/multi', async (request, response, next) => {
     for (const service of finalAvailability.services) {
       const serviceEnd = new Date(serviceStart.getTime() + service.durationMinutes * 60_000);
       const [created] = await connection.execute(
-        `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, client_notes, updated_by) VALUES (?, ?, ?, ?, ?, 'CONFIRMED', ?, ?)`,
-        [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), clientNotes ?? null, request.auth.sub]
+        `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, updated_by) VALUES (?, ?, ?, ?, ?, 'CONFIRMED', ?)`,
+        [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), request.auth.sub]
       );
       ids.push(created.insertId);
       await scheduleAppointmentReminders(connection, created.insertId);
@@ -237,11 +236,13 @@ router.get('/mine', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
             `SELECT a.id, a.barber_id AS barberId, a.service_id AS serviceId,
-              a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.client_notes AS clientNotes, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt,
-              s.name AS serviceName, s.price AS price, b.display_name AS barberName, b.photo_url AS barberPhotoUrl
+              a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt,
+              s.name AS serviceName, s.price AS price, b.display_name AS barberName, b.photo_url AS barberPhotoUrl,
+              r.id AS reviewId, r.rating AS reviewRating
        FROM appointments a
        JOIN services s ON s.id = a.service_id
        JOIN barbers b ON b.id = a.barber_id
+       LEFT JOIN reviews r ON r.appointment_id = a.id
        WHERE a.client_id = ? ORDER BY a.starts_at DESC`,
       [request.auth.sub]
     );
@@ -268,7 +269,7 @@ router.get('/admin', requireRole('ADMINISTRADOR'), async (request, response, nex
     const [rows] = await pool.execute(
       `SELECT a.id, a.client_id AS clientId, a.barber_id AS barberId, a.service_id AS serviceId,
        a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancellation_reason AS cancellationReason,
-       a.client_notes AS clientNotes, a.admin_notes AS adminNotes, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt, a.updated_by AS updatedBy,
+       a.admin_notes AS adminNotes, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt, a.updated_by AS updatedBy,
        s.name AS serviceName, b.display_name AS barberName,
        CONCAT(u.first_name, ' ', u.last_name) AS clientName
        FROM appointments a JOIN services s ON s.id = a.service_id JOIN barbers b ON b.id = a.barber_id
