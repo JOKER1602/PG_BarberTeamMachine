@@ -1,21 +1,11 @@
 import { Router } from 'express';
-import { mkdirSync } from 'node:fs';
-import path from 'node:path';
-import { randomUUID } from 'node:crypto';
-import multer from 'multer';
 import { z } from 'zod';
 import pool from '../config/database.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
+import { createImageUpload } from '../middleware/image-upload.js';
 
 const router = Router();
-const uploadDirectory = path.resolve(process.cwd(), 'uploads', 'payments');
-mkdirSync(uploadDirectory, { recursive: true });
-const imageExtensions = { 'image/jpeg': '.jpg', 'image/png': '.png', 'image/webp': '.webp' };
-const qrUpload = multer({
-  storage: multer.diskStorage({ destination: (_request, _file, done) => done(null, uploadDirectory), filename: (_request, file, done) => done(null, `qr-${Date.now()}-${randomUUID()}${imageExtensions[file.mimetype]}`) }),
-  limits: { fileSize: 5 * 1024 * 1024 },
-  fileFilter: (_request, file, done) => imageExtensions[file.mimetype] ? done(null, true) : done(Object.assign(new Error('El QR debe ser JPG, PNG o WEBP'), { status: 400 }))
-});
+const qrUpload = createImageUpload({ folder: 'payments', prefix: 'qr', label: 'código QR' });
 const fields = {
   businessName: 'business_name', address: 'address', city: 'city', country: 'country', phone: 'phone', whatsapp: 'whatsapp',
   hoursText: 'hours_text', mapsUrl: 'maps_url', instagramUrl: 'instagram_url', facebookUrl: 'facebook_url', paymentQrUrl: 'payment_qr_url', description: 'description'

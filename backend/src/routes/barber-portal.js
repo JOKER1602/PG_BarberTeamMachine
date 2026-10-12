@@ -17,7 +17,7 @@ router.patch('/appointments/:id/complete', requireAuth, requireRole('BARBERO'), 
       `SELECT a.id, a.client_id AS clientId
        FROM appointments a JOIN barbers b ON b.id = a.barber_id
        WHERE a.id = ? AND b.user_id = ? AND b.is_active = TRUE
-       AND a.status IN ('PENDING', 'CONFIRMED')`,
+       AND a.status = 'CONFIRMED'`,
       [appointmentId, request.auth.sub]
     );
     if (!rows.length) {
@@ -57,7 +57,7 @@ router.patch('/appointments/:id/status', requireAuth, requireRole('BARBERO'), as
       `SELECT a.id, a.client_id AS clientId
        FROM appointments a JOIN barbers b ON b.id = a.barber_id
        WHERE a.id = ? AND b.user_id = ? AND b.is_active = TRUE
-       AND a.status IN ('PENDING', 'CONFIRMED')
+       AND a.status = 'CONFIRMED'
        FOR UPDATE`,
       [id.data, request.auth.sub]
     );

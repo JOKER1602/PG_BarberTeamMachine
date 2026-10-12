@@ -58,7 +58,6 @@ export const api = {
   requestPasswordReset: (email) => request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
   resetPassword: (body) => request('/auth/reset-password', { method: 'POST', body: JSON.stringify(body) }),
   appointments: () => request('/appointments/mine'),
-  createAppointment: (body) => request('/appointments', { method: 'POST', body: JSON.stringify(body) }),
   createAppointments: (body) => request('/appointments/multi', { method: 'POST', body: JSON.stringify(body) }),
   rescheduleAppointment: (id, startsAt) => request(`/appointments/${id}/reschedule`, { method: 'PATCH', body: JSON.stringify({ startsAt }) }),
   cancelAppointment: (id) => request(`/appointments/${id}/cancel`, { method: 'PATCH' }),
