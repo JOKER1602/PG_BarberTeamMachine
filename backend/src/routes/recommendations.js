@@ -4,6 +4,7 @@ import pool from '../config/database.js';
 import { BARBER_TIME_ZONE, zonedParts } from '../config/time.js';
 import { requireAuth } from '../middleware/auth.js';
 import { findAvailableSlotsForDate } from '../services/appointment-availability.js';
+import { tenantIdOf } from '../middleware/tenant.js';
 
 const router = Router();
 const querySchema = z.object({
@@ -32,6 +33,7 @@ router.get('/', requireAuth, async (request, response, next) => {
   if (!parsed.success) return response.status(400).json({ message: 'Parámetros de recomendación inválidos' });
 
   const serviceIds = parsed.data.serviceIds ? [...new Set(parsed.data.serviceIds.split(',').map(Number))] : [];
+  const tenantId = tenantIdOf(request);
   const connection = await pool.getConnection();
   try {
     const [history] = await connection.execute(
@@ -39,11 +41,12 @@ router.get('/', requireAuth, async (request, response, next) => {
               s.name AS serviceName, s.price, s.duration_minutes AS durationMinutes,
               b.display_name AS barberName
        FROM appointments a
-       JOIN services s ON s.id = a.service_id
-       JOIN barbers b ON b.id = a.barber_id
-       WHERE a.client_id = ? AND a.status = 'COMPLETED'
+       JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
+       JOIN barbers b ON b.id = a.barber_id AND b.tenant_id = a.tenant_id
+       WHERE a.tenant_id = ? AND a.client_id = ? AND a.status = 'COMPLETED'
        ORDER BY a.starts_at DESC LIMIT 100`,
-      [request.auth.sub]
+      // El historial que se usa es el del cliente en ESTA barbería.
+      [tenantId, request.auth.sub]
     );
 
     const historyServiceCounts = countBy(history, (item) => item.serviceId);
@@ -66,12 +69,12 @@ router.get('/', requireAuth, async (request, response, next) => {
       const [popular] = await connection.execute(
         `SELECT s.id, s.name, s.price, s.duration_minutes AS durationMinutes, COUNT(a.id) AS bookings
          FROM services s
-         LEFT JOIN appointments a ON a.service_id = s.id AND a.status = 'COMPLETED'
-         WHERE s.is_active = TRUE ${clause}
+         LEFT JOIN appointments a ON a.service_id = s.id AND a.tenant_id = s.tenant_id AND a.status = 'COMPLETED'
+         WHERE s.tenant_id = ? AND s.is_active = TRUE ${clause}
          GROUP BY s.id ORDER BY bookings DESC, s.name LIMIT ${Number(3 - serviceSuggestions.length)}`,
         // LIMIT va como entero literal: algunas versiones de MySQL 8 rechazan
         // un LIMIT parametrizado en sentencias preparadas (pool.execute).
-        excluded
+        [tenantId, ...excluded]
       );
       serviceSuggestions = [...serviceSuggestions, ...popular.map((item) => ({
         id: item.id, name: item.name, price: Number(item.price), durationMinutes: item.durationMinutes,
@@ -84,11 +87,11 @@ router.get('/', requireAuth, async (request, response, next) => {
     const servicePlaceholders = serviceIds.map(() => '?').join(', ');
     const [compatibleBarbers] = await connection.execute(
       `SELECT b.id, b.display_name AS displayName
-       FROM barbers b JOIN barber_services bs ON bs.barber_id = b.id
-       WHERE b.is_active = TRUE AND bs.service_id IN (${servicePlaceholders})
+       FROM barbers b JOIN barber_services bs ON bs.barber_id = b.id AND bs.tenant_id = b.tenant_id
+       WHERE b.tenant_id = ? AND b.is_active = TRUE AND bs.service_id IN (${servicePlaceholders})
        GROUP BY b.id HAVING COUNT(DISTINCT bs.service_id) = ?
        ORDER BY b.display_name`,
-      [...serviceIds, serviceIds.length]
+      [tenantId, ...serviceIds, serviceIds.length]
     );
 
     const barberCounts = countBy(history, (item) => item.barberId);
@@ -98,7 +101,7 @@ router.get('/', requireAuth, async (request, response, next) => {
     for (let dayOffset = 0; dayOffset < parsed.data.days; dayOffset += 1) {
       const date = barberDateAfter(dayOffset);
       for (const barber of compatibleBarbers) {
-        const slots = await findAvailableSlotsForDate(connection, { barberId: barber.id, serviceIds, date });
+        const slots = await findAvailableSlotsForDate(connection, { tenantId, barberId: barber.id, serviceIds, date });
         for (const slot of (slots ?? []).slice(0, 8)) {
           const timing = zonedParts(slot.startsAt);
           const barberVisits = barberCounts.get(String(barber.id)) ?? 0;

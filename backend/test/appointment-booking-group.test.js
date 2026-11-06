@@ -7,6 +7,7 @@ import appointmentsRouter from '../src/routes/appointments.js';
 import { zonedParts } from '../src/config/time.js';
 
 const JWT_SECRET = 'booking-group-test-secret';
+const TENANT_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
 
 function routeHandler(path, method) {
   return appointmentsRouter.stack.find((layer) => layer.route?.path === path && layer.route.methods[method]).route.stack.at(-1).handle;
@@ -18,6 +19,7 @@ function run(handler, { params, body, role = 'CLIENTE', sub = '5' }) {
     const request = {
       params,
       body,
+      tenant: { id: TENANT_ID, slug: 'empyrean-studio' },
       get: (header) => (header.toLowerCase() === 'cookie' ? `empyrean_session=${token}` : undefined)
     };
     const response = {
@@ -95,7 +97,7 @@ test('reprogramar mueve todos los servicios de la reserva en cadena', async () =
     if (sql.includes('s.duration_minutes AS durationMinutes') && sql.includes('a.payment_reference = ?')) {
       return [{ id: 10, serviceId: 1, durationMinutes: 30 }, { id: 11, serviceId: 3, durationMinutes: 20 }];
     }
-    if (sql.includes('FROM services s JOIN barber_services')) return [{ id: 1, durationMinutes: 30, price: 50 }];
+    if (sql.includes('JOIN barber_services bs')) return [{ id: 1, durationMinutes: 30, price: 50 }];
     if (sql.includes('FROM barber_working_hours')) return [{ weekday, start_minutes: 9 * 60, end_minutes: 20 * 60 }];
     if (sql.includes('FROM schedule_blocks')) return [];
     // Las citas actuales de la misma reserva se solapan con el nuevo horario,
@@ -115,8 +117,8 @@ test('reprogramar mueve todos los servicios de la reserva en cadena', async () =
   assert.deepEqual(result.body.rescheduledIds, [10, 11]);
   const updates = connection.calls.filter((call) => call.sql.includes('UPDATE appointments SET starts_at'));
   assert.deepEqual(updates.map((call) => call.values), [
-    ['2030-03-13 14:00:00', '2030-03-13 14:30:00', 'CONFIRMED', '5', 10],
-    ['2030-03-13 14:30:00', '2030-03-13 14:50:00', 'CONFIRMED', '5', 11]
+    ['2030-03-13 14:00:00', '2030-03-13 14:30:00', 'CONFIRMED', '5', 10, TENANT_ID],
+    ['2030-03-13 14:30:00', '2030-03-13 14:50:00', 'CONFIRMED', '5', 11, TENANT_ID]
   ]);
 });
 
@@ -131,7 +133,7 @@ test('reprogramar rechaza el horario si otra cita ajena ocupa la cadena completa
     if (sql.includes('s.duration_minutes AS durationMinutes') && sql.includes('a.payment_reference = ?')) {
       return [{ id: 10, serviceId: 1, durationMinutes: 30 }, { id: 11, serviceId: 3, durationMinutes: 20 }];
     }
-    if (sql.includes('FROM services s JOIN barber_services')) return [{ id: 1, durationMinutes: 30, price: 50 }];
+    if (sql.includes('JOIN barber_services bs')) return [{ id: 1, durationMinutes: 30, price: 50 }];
     if (sql.includes('FROM barber_working_hours')) return [{ weekday, start_minutes: 9 * 60, end_minutes: 20 * 60 }];
     if (sql.includes('FROM schedule_blocks')) return [];
     // Otra cita empieza a los 40 minutos: cabe el primer servicio, no el segundo.

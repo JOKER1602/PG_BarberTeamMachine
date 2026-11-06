@@ -2,7 +2,10 @@ import { Router } from 'express';
 import { z } from 'zod';
 import pool from '../config/database.js';
 import { requireAuth } from '../middleware/auth.js';
+import { tenantIdOf } from '../middleware/tenant.js';
 
+// Aislado por tenant: la bandeja muestra las notificaciones de la persona en
+// la barbería de la URL.
 const router = Router();
 
 router.use(requireAuth);
@@ -11,8 +14,8 @@ router.get('/', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
       `SELECT id, appointment_id AS appointmentId, type, title, message, read_at AS readAt, created_at AS createdAt
-       FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50`,
-      [request.auth.sub]
+       FROM notifications WHERE tenant_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 50`,
+      [tenantIdOf(request), request.auth.sub]
     );
     return response.json({ notifications: rows });
   } catch (error) {
@@ -28,8 +31,8 @@ router.patch('/:id/read', async (request, response, next) => {
 
   try {
     await pool.execute(
-      'UPDATE notifications SET read_at = COALESCE(read_at, UTC_TIMESTAMP()) WHERE id = ? AND user_id = ?',
-      [parsed.data, request.auth.sub]
+      'UPDATE notifications SET read_at = COALESCE(read_at, UTC_TIMESTAMP()) WHERE id = ? AND tenant_id = ? AND user_id = ?',
+      [parsed.data, tenantIdOf(request), request.auth.sub]
     );
     return response.status(204).send();
   } catch (error) {

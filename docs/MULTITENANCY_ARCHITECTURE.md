@@ -74,9 +74,9 @@ No se ejecutará una migración parcial en la base activa: durante el cambio se 
 
 Las columnas `tenant_id` se movieron a `database/014_tenant_isolation.sql`, que pertenece al Incremento 2.
 
-### Incremento 2 — Datos operativos aislados (en curso)
+### Incremento 2 — Datos operativos aislados ✅ (backend)
 
-Hecho: servicios, categorías, barberos, horarios, bloqueos, configuración y cuentas de barbero, publicados en `/api/t/:tenantSlug/...` y en `/api/...` para `DEFAULT_TENANT_SLUG`. Desarrollo sobre la base copia `barber_team_machine_saas` (013 + 014). Pendiente: citas, cobros, comprobantes, reseñas, notificaciones, recordatorios, analítica y portal del barbero. Detalle en `AI_PROJECT_HANDOFF.md`.
+Los 11 módulos de negocio filtran por tenant y se publican en `/api/t/:tenantSlug/...` (y en `/api/...` para `DEFAULT_TENANT_SLUG` durante la transición del frontend). Comprobantes privados en `uploads/payments/<tenant_id>/`. Desarrollo sobre la base copia `barber_team_machine_saas` (013 + 014). Detalle y pendientes en `AI_PROJECT_HANDOFF.md`.
 
 - servicios, barberos, horarios, bloqueos y citas con `tenant_id`;
 - disponibilidad y prevención de cruces dentro de la barbería correcta;

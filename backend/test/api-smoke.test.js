@@ -2,11 +2,19 @@ import { after, before, test } from 'node:test';
 import assert from 'node:assert/strict';
 import { createServer } from 'node:http';
 import app from '../src/app.js';
+import pool from '../src/config/database.js';
 
 let server;
 let baseUrl;
+const originalExecute = pool.execute;
 
 before(async () => {
+  // Las rutas /api/... resuelven la barbería por defecto. Se simula solo esa
+  // consulta para que la prueba no necesite una base de datos real.
+  pool.execute = async (sql, values) => {
+    if (sql.includes('FROM tenants WHERE slug = ?')) return [[{ id: 'tenant-smoke', slug: values[0], displayName: 'Smoke', status: 'ACTIVE' }]];
+    throw new Error(`La prueba de humo no debe consultar la base: ${sql}`);
+  };
   server = createServer(app);
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
   const { port } = server.address();
@@ -14,6 +22,7 @@ before(async () => {
 });
 
 after(async () => {
+  pool.execute = originalExecute;
   await new Promise((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
 });
 

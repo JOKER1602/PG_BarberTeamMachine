@@ -14,15 +14,19 @@ test('normaliza números móviles bolivianos y rechaza números inválidos', () 
 test('programa WhatsApp solo dos horas antes y para citas confirmadas', async () => {
   const calls = [];
   const connection = { execute: async (sql, values) => { calls.push({ sql, values }); return [{}]; } };
-  await scheduleAppointmentReminders(connection, 17);
+  await scheduleAppointmentReminders(connection, 17, 'tenant-a');
   const whatsapp = calls.filter(({ sql }) => sql.includes("'WHATSAPP'"));
   assert.equal(whatsapp.length, 1);
   assert.match(whatsapp[0].sql, /'2H'/);
   assert.match(whatsapp[0].sql, /status = 'CONFIRMED'/);
   assert.match(whatsapp[0].sql, /INTERVAL 2 HOUR/);
-  assert.deepEqual(whatsapp[0].values, [17]);
-  await cancelAppointmentReminders(connection, 17);
+  assert.deepEqual(whatsapp[0].values, [17, 'tenant-a']);
+  await cancelAppointmentReminders(connection, 17, 'tenant-a');
   assert.match(calls.at(-1).sql, /status = 'CANCELLED'/);
+  assert.deepEqual(calls.at(-1).values, [17, 'tenant-a']);
+  // Sin barbería no se programa ni cancela nada.
+  await assert.rejects(scheduleAppointmentReminders(connection, 17), /requieren tenantId/);
+  await assert.rejects(cancelAppointmentReminders(connection, 17), /requieren tenantId/);
 });
 
 test('envía a Twilio la plantilla aprobada sin exponer el token', async () => {

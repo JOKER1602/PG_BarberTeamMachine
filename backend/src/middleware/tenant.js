@@ -92,6 +92,29 @@ export function requireTenantMembership(...allowedRoles) {
   };
 }
 
+// Para rutas que usan tanto clientes como personal (cancelar, reprogramar):
+// carga la membresía si existe, sin exigirla. Un cliente queda con null.
+export async function loadOptionalTenantMembership(request, _response, next) {
+  if (!request.tenant?.id) return next(new Error('loadOptionalTenantMembership requiere resolveTenant antes'));
+  if (!request.auth?.sub) return next();
+  try {
+    const [rows] = await pool.execute(
+      'SELECT role FROM tenant_memberships WHERE tenant_id = ? AND user_id = ? AND is_active = TRUE',
+      [request.tenant.id, request.auth.sub]
+    );
+    request.membership = rows[0] ? Object.freeze({ tenantId: request.tenant.id, role: rows[0].role }) : null;
+    return next();
+  } catch (error) {
+    return next(error);
+  }
+}
+
+// Administra la barbería de la URL (no la de otra): OWNER o ADMIN activos.
+export function isTenantAdmin(request) {
+  return Boolean(request.membership && request.membership.tenantId === request.tenant?.id
+    && TENANT_ADMIN_ROLES.includes(request.membership.role));
+}
+
 // Operador interno de la plataforma (crear, suspender o reactivar barberías).
 // No concede acceso a los datos operativos de ningún tenant.
 export async function requirePlatformAdmin(request, response, next) {

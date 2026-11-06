@@ -1,32 +1,47 @@
 import pool from '../config/database.js';
 import { isEmailConfigured, sendAppointmentReminderEmail } from './email.js';
 import { isWhatsAppConfigured, sendWhatsAppReminder } from './whatsapp.js';
+import { notify } from './notifications.js';
+
+// Los trabajos de recordatorio heredan el tenant_id de su cita. El worker es
+// único para toda la plataforma y procesa todas las barberías.
 
 const reminderTypes = [['24H', '24 HOUR'], ['2H', '2 HOUR']];
 
-export async function scheduleAppointmentReminders(connection, appointmentId) {
+// Ambas funciones exigen el tenant de la petición: aunque el llamador ya
+// verificó la cita, la consulta nunca toca recordatorios de otra barbería.
+function requireTenant(tenantId) {
+  if (!tenantId) throw new Error('Los recordatorios requieren tenantId');
+}
+
+export async function scheduleAppointmentReminders(connection, appointmentId, tenantId) {
+  requireTenant(tenantId);
   for (const [type, interval] of reminderTypes) {
     for (const channel of ['EMAIL', 'IN_APP']) {
       await connection.execute(
-        `INSERT INTO reminder_jobs (appointment_id, channel, reminder_type, scheduled_at, status, sent_at, attempts, last_error)
-         SELECT id, ?, ?, DATE_SUB(starts_at, INTERVAL ${interval}), 'PENDING', NULL, 0, NULL
-         FROM appointments WHERE id = ? AND status = 'CONFIRMED'
+        `INSERT INTO reminder_jobs (tenant_id, appointment_id, channel, reminder_type, scheduled_at, status, sent_at, attempts, last_error)
+         SELECT tenant_id, id, ?, ?, DATE_SUB(starts_at, INTERVAL ${interval}), 'PENDING', NULL, 0, NULL
+         FROM appointments WHERE id = ? AND tenant_id = ? AND status = 'CONFIRMED'
          ON DUPLICATE KEY UPDATE scheduled_at = VALUES(scheduled_at), status = 'PENDING', sent_at = NULL, attempts = 0, last_error = NULL`,
-        [channel, type, appointmentId]
+        [channel, type, appointmentId, tenantId]
       );
     }
   }
   await connection.execute(
-    `INSERT INTO reminder_jobs (appointment_id, channel, reminder_type, scheduled_at, status, sent_at, attempts, last_error)
-     SELECT id, 'WHATSAPP', '2H', DATE_SUB(starts_at, INTERVAL 2 HOUR), 'PENDING', NULL, 0, NULL
-     FROM appointments WHERE id = ? AND status = 'CONFIRMED' AND starts_at >= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 2 HOUR)
+    `INSERT INTO reminder_jobs (tenant_id, appointment_id, channel, reminder_type, scheduled_at, status, sent_at, attempts, last_error)
+     SELECT tenant_id, id, 'WHATSAPP', '2H', DATE_SUB(starts_at, INTERVAL 2 HOUR), 'PENDING', NULL, 0, NULL
+     FROM appointments WHERE id = ? AND tenant_id = ? AND status = 'CONFIRMED' AND starts_at >= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 2 HOUR)
      ON DUPLICATE KEY UPDATE scheduled_at = VALUES(scheduled_at), status = 'PENDING', sent_at = NULL, attempts = 0, last_error = NULL`,
-    [appointmentId]
+    [appointmentId, tenantId]
   );
 }
 
-export async function cancelAppointmentReminders(connection, appointmentId) {
-  await connection.execute("UPDATE reminder_jobs SET status = 'CANCELLED' WHERE appointment_id = ? AND status IN ('PENDING', 'FAILED')", [appointmentId]);
+export async function cancelAppointmentReminders(connection, appointmentId, tenantId) {
+  requireTenant(tenantId);
+  await connection.execute(
+    "UPDATE reminder_jobs SET status = 'CANCELLED' WHERE appointment_id = ? AND tenant_id = ? AND status IN ('PENDING', 'FAILED')",
+    [appointmentId, tenantId]
+  );
 }
 
 export async function processDueReminders() {
@@ -43,7 +58,7 @@ export async function processDueReminders() {
        AND (a.starts_at <= UTC_TIMESTAMP() OR r.scheduled_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL 15 MINUTE))`
     );
     const [jobs] = await connection.execute(
-      `SELECT r.id, r.appointment_id AS appointmentId, r.channel, r.reminder_type AS reminderType, r.attempts,
+      `SELECT r.id, r.tenant_id AS tenantId, r.appointment_id AS appointmentId, r.channel, r.reminder_type AS reminderType, r.attempts,
         a.starts_at AS startsAt, a.payment_reference AS paymentReference, s.name AS serviceName, b.display_name AS barberName,
         u.id AS userId, u.first_name AS firstName, u.email, u.phone AS clientPhone, u.whatsapp_opt_in_at AS whatsappOptInAt,
         bs.business_name AS businessName, bs.address, bs.city, bs.phone
@@ -69,7 +84,7 @@ export async function processDueReminders() {
           await sendWhatsAppReminder({ phone: current[0].phone, firstName: job.firstName, appointment: job, businessName: job.businessName ?? 'Empyrean Studio' });
         }
         if (job.channel === 'EMAIL') await sendAppointmentReminderEmail({ to: job.email, firstName: job.firstName, appointment: job, business: { businessName: job.businessName ?? 'Empyrean Studio', address: job.address ?? '', city: job.city ?? '', phone: job.phone ?? '' } });
-        if (job.channel === 'IN_APP') await connection.execute('INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, ?, ?, ?)', [job.userId, job.appointmentId, `REMINDER_${job.reminderType}`, `Recordatorio de cita (${job.reminderType})`, `Recuerda tu cita de ${job.serviceName} con ${job.barberName}.`]);
+        if (job.channel === 'IN_APP') await notify(connection, { tenantId: job.tenantId, userId: job.userId, appointmentId: job.appointmentId, type: `REMINDER_${job.reminderType}`, title: `Recordatorio de cita (${job.reminderType})`, message: `Recuerda tu cita de ${job.serviceName} con ${job.barberName}.` });
         await connection.execute("UPDATE reminder_jobs SET status = 'SENT', sent_at = UTC_TIMESTAMP(), attempts = attempts + 1, last_error = NULL WHERE id = ?", [job.id]);
         if (job.channel === 'WHATSAPP' && job.paymentReference) {
           await connection.execute("UPDATE reminder_jobs r JOIN appointments a ON a.id = r.appointment_id SET r.status = 'CANCELLED', r.last_error = 'Recordatorio enviado para la reserva' WHERE a.payment_reference = ? AND r.channel = 'WHATSAPP' AND r.id <> ? AND r.status = 'PENDING'", [job.paymentReference, job.id]);

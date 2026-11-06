@@ -5,6 +5,7 @@ import pool from '../src/config/database.js';
 import adminRouter from '../src/routes/admin.js';
 
 const JWT_SECRET = 'phase-8-dashboard-secret';
+const TENANT_ID = 'aaaaaaaa-0000-0000-0000-000000000001';
 
 function adminToken(role = 'ADMINISTRADOR') {
   return jwt.sign({ sub: role === 'ADMINISTRADOR' ? '1' : '2', role }, JWT_SECRET, { expiresIn: '5m' });
@@ -23,6 +24,7 @@ function runDashboard(query, token) {
   return new Promise((resolve, reject) => {
     const request = {
       query,
+      tenant: { id: TENANT_ID, slug: 'empyrean-studio' },
       get(header) {
         return header.toLowerCase() === 'cookie' ? `empyrean_session=${token}` : undefined;
       }
@@ -72,6 +74,8 @@ test('el dashboard aplica filtros, protege los datos y no necesita una base real
   pool.execute = async (sql, values = []) => {
     // requireAuth confirma la cuenta y su rol vigente; no cuenta como consulta del panel.
     if (sql.includes('FROM users u JOIN roles r')) return [[{ isActive: 1, role: values[0] === '1' ? 'ADMINISTRADOR' : 'CLIENTE' }]];
+    // El usuario 1 es OWNER de la barbería; el 2 no tiene membresía en ella.
+    if (sql.includes('FROM tenant_memberships')) return [values[0] === TENANT_ID && values[1] === '1' ? [{ role: 'OWNER' }] : []];
     calls.push({ sql, values });
     return [dashboardRowsFor(sql)];
   };
@@ -99,10 +103,11 @@ test('el dashboard aplica filtros, protege los datos y no necesita una base real
     for (const call of localGrouping) assert.ok(call.sql.includes("CONVERT_TZ(a.starts_at, '+00:00', '-04:00')"));
 
     // Días de Cochabamba (UTC-4): del 1 de octubre 00:00 local al 1 de noviembre 00:00 local.
-    const filterValues = ['2026-10-01 04:00:00', '2026-11-01 04:00:00', 2, 3];
+    const filterValues = [TENANT_ID, '2026-10-01 04:00:00', '2026-11-01 04:00:00', 2, 3];
     assert.deepEqual(calls[0].values, [...filterValues, ...filterValues]);
     for (const call of calls.slice(1)) assert.deepEqual(call.values, filterValues);
     for (const call of calls) {
+      assert.match(call.sql, /a\.tenant_id = \?/);
       assert.match(call.sql, /a\.starts_at >= \?/);
       assert.match(call.sql, /a\.barber_id = \?/);
       assert.match(call.sql, /a\.service_id = \?/);

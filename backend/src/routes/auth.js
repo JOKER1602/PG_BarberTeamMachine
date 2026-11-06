@@ -149,8 +149,10 @@ router.patch('/me', requireAuth, async (request, response, next) => {
     );
     if (parsed.data.whatsappConsent) {
       await connection.execute(
-        `INSERT INTO reminder_jobs (appointment_id, channel, reminder_type, scheduled_at, status)
-         SELECT id, 'WHATSAPP', '2H', DATE_SUB(starts_at, INTERVAL 2 HOUR), 'PENDING'
+        // El consentimiento es de la persona (global): se aplica a sus citas
+        // confirmadas en todas las barberías, cada trabajo con el tenant de su cita.
+        `INSERT INTO reminder_jobs (tenant_id, appointment_id, channel, reminder_type, scheduled_at, status)
+         SELECT tenant_id, id, 'WHATSAPP', '2H', DATE_SUB(starts_at, INTERVAL 2 HOUR), 'PENDING'
          FROM appointments WHERE client_id = ? AND status = 'CONFIRMED' AND starts_at >= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 2 HOUR)
          ON DUPLICATE KEY UPDATE scheduled_at = VALUES(scheduled_at), status = IF(reminder_jobs.status = 'CANCELLED', 'PENDING', reminder_jobs.status)`,
         [request.auth.sub]

@@ -4,6 +4,7 @@ import pool from '../config/database.js';
 import { zonedParts } from '../config/time.js';
 import { findAvailableSlotsForDate } from '../services/appointment-availability.js';
 import { interpretBookingRequest } from '../services/booking-assistant.js';
+import { tenantIdOf } from '../middleware/tenant.js';
 
 const router = Router();
 const requestSchema = z.object({ query: z.string().trim().min(3).max(400) });
@@ -17,10 +18,12 @@ function addDays(date, days) {
 router.post('/query', async (request, response, next) => {
   const parsed = requestSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Escribe una consulta de al menos tres caracteres.' });
+  const tenantId = tenantIdOf(request);
   const connection = await pool.getConnection();
   try {
-    const [services] = await connection.execute('SELECT id, name, price, duration_minutes AS durationMinutes FROM services WHERE is_active = TRUE ORDER BY name');
-    const [barbers] = await connection.execute('SELECT id, display_name AS displayName FROM barbers WHERE is_active = TRUE ORDER BY display_name');
+    // Solo servicios y profesionales de la barbería consultada.
+    const [services] = await connection.execute('SELECT id, name, price, duration_minutes AS durationMinutes FROM services WHERE tenant_id = ? AND is_active = TRUE ORDER BY name', [tenantId]);
+    const [barbers] = await connection.execute('SELECT id, display_name AS displayName FROM barbers WHERE tenant_id = ? AND is_active = TRUE ORDER BY display_name', [tenantId]);
     const interpretation = interpretBookingRequest(parsed.data.query, { services, barbers });
     if (!interpretation.service) {
       return response.json({
@@ -36,7 +39,7 @@ router.post('/query', async (request, response, next) => {
     const candidates = [];
     for (const date of dates) {
       for (const barber of compatibleBarbers) {
-        const slots = await findAvailableSlotsForDate(connection, { barberId: barber.id, serviceIds: [interpretation.service.id], date });
+        const slots = await findAvailableSlotsForDate(connection, { tenantId, barberId: barber.id, serviceIds: [interpretation.service.id], date });
         for (const slot of slots ?? []) {
           const localMinutes = zonedParts(slot.startsAt).minutes;
           const difference = interpretation.preferredMinutes === null ? 0 : Math.abs(localMinutes - interpretation.preferredMinutes);

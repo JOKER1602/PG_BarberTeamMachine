@@ -71,30 +71,31 @@ app.use('/uploads/payments', (request, response, next) => {
   return express.static(path.resolve(process.cwd(), 'uploads', 'payments'))(request, response, next);
 });
 
-// SaaS · Incremento 2. Los módulos ya aislados por tenant_id se publican en
-// /api/t/:tenantSlug/... y, durante la transición, también en /api/... para la
-// barbería por defecto (DEFAULT_TENANT_SLUG), así el frontend actual sigue igual.
-// Un módulo SOLO entra en tenantApi cuando todas sus consultas filtran por
-// tenant: lo que aún no está aislado nunca debe poder pedirse con otro slug.
+// SaaS multiempresa. Todos los módulos de negocio filtran por tenant_id y se
+// publican en /api/t/:tenantSlug/... Durante la transición del frontend, las
+// rutas antiguas /api/... atienden a la barbería DEFAULT_TENANT_SLUG.
+// Solo /api/auth y /api/health son globales (las cuentas son de la persona).
+const tenantModules = {
+  '/services': servicesRouter,
+  '/barbers': barbersRouter,
+  '/settings': settingsRouter,
+  '/admin': adminRouter,
+  '/barber': barberPortalRouter,
+  '/appointments': appointmentsRouter,
+  '/payments': paymentsRouter,
+  '/reviews': reviewsRouter,
+  '/notifications': notificationsRouter,
+  '/recommendations': recommendationsRouter,
+  '/assistant': assistantRouter
+};
+export const TENANT_MODULE_PATHS = Object.freeze(Object.keys(tenantModules));
 const tenantApi = express.Router();
-tenantApi.use('/services', servicesRouter);
-tenantApi.use('/barbers', barbersRouter);
-tenantApi.use('/settings', settingsRouter);
-app.use('/api/t/:tenantSlug', resolveTenant, tenantApi);
+for (const [prefix, router] of Object.entries(tenantModules)) tenantApi.use(prefix, router);
 
+app.use('/api/t/:tenantSlug', resolveTenant, tenantApi);
 app.use('/api/auth', authRouter);
-// Aún no aislado por completo (panel y usuarios): solo barbería por defecto.
-// (adminRouter resuelve la barbería por defecto después de autenticar).
-app.use('/api/admin', adminRouter);
-app.use('/api/barber', barberPortalRouter);
-app.use(['/api/services', '/api/barbers', '/api/settings'], resolveDefaultTenant);
+app.use(TENANT_MODULE_PATHS.map((prefix) => `/api${prefix}`), resolveDefaultTenant);
 app.use('/api', tenantApi);
-app.use('/api/reviews', reviewsRouter);
-app.use('/api/payments', paymentsRouter);
-app.use('/api/recommendations', recommendationsRouter);
-app.use('/api/assistant', assistantRouter);
-app.use('/api/appointments', appointmentsRouter);
-app.use('/api/notifications', notificationsRouter);
 
 app.get('/api/health', (_request, response) => {
   response.json({

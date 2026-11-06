@@ -1,19 +1,14 @@
 import { Router } from 'express';
 import { z } from 'zod';
 import pool from '../config/database.js';
-import { requireAuth, requireRole } from '../middleware/auth.js';
+import { requireAuth } from '../middleware/auth.js';
 import { localDateFilterBounds, localSqlTime } from '../config/time.js';
-import { resolveDefaultTenant, tenantIdOf } from '../middleware/tenant.js';
+import { TENANT_ADMIN_ROLES, requireTenantMembership, tenantIdOf } from '../middleware/tenant.js';
 
-// SaaS: este módulo se monta solo para la barbería por defecto (app.js) porque
-// el panel y la lista de usuarios aún no filtran por tenant (Incremento 2,
-// paso de analítica). Las cuentas de barbero ya usan tenantIdOf.
-
+// Aislado por tenant: panel, usuarios y cuentas de barbero de la barbería de
+// la URL. Administrar exige ser OWNER/ADMIN de ESA barbería.
 const router = Router();
-router.use(requireAuth, requireRole('ADMINISTRADOR'));
-// La barbería se resuelve después de autenticar: una petición anónima recibe
-// 401 sin consultar la base.
-router.use(resolveDefaultTenant);
+router.use(requireAuth, requireTenantMembership(...TENANT_ADMIN_ROLES));
 
 const personalName = z.string().trim().min(2).max(80).regex(/^[\p{L}]+(?:[ '\-][\p{L}]+)*$/u, 'El nombre contiene caracteres no permitidos');
 
@@ -24,22 +19,22 @@ const dashboardFilters = z.object({
   serviceId: z.coerce.number().int().positive().optional()
 });
 
-function appointmentWhere(filters) {
-  const clauses = [];
-  const values = [];
+function appointmentWhere(tenantId, filters) {
+  const clauses = ['a.tenant_id = ?'];
+  const values = [tenantId];
   // Los filtros son días de Cochabamba; las citas se guardan en UTC.
   const bounds = localDateFilterBounds(filters);
   if (bounds.from) { clauses.push('a.starts_at >= ?'); values.push(bounds.from); }
   if (bounds.toExclusive) { clauses.push('a.starts_at < ?'); values.push(bounds.toExclusive); }
   if (filters.barberId) { clauses.push('a.barber_id = ?'); values.push(filters.barberId); }
   if (filters.serviceId) { clauses.push('a.service_id = ?'); values.push(filters.serviceId); }
-  return { where: clauses.length ? `WHERE ${clauses.join(' AND ')}` : '', values };
+  return { where: `WHERE ${clauses.join(' AND ')}`, values };
 }
 
 router.get('/dashboard', async (request, response, next) => {
   const parsed = dashboardFilters.safeParse(request.query);
   if (!parsed.success) return response.status(400).json({ message: 'Filtros del panel invalidos' });
-  const { where, values } = appointmentWhere(parsed.data);
+  const { where, values } = appointmentWhere(tenantIdOf(request), parsed.data);
 
   try {
     const [metricRows] = await pool.execute(
@@ -56,12 +51,12 @@ router.get('/dashboard', async (request, response, next) => {
          SELECT a2.client_id FROM appointments a2 ${where.replaceAll('a.', 'a2.')}
          GROUP BY a2.client_id HAVING COUNT(*) > 1
        ) AS recurrent), 0) AS recurringClients
-       FROM appointments a JOIN services s ON s.id = a.service_id ${where}`,
+       FROM appointments a JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id ${where}`,
       [...values, ...values]
     );
     const [serviceRows] = await pool.execute(
       `SELECT s.name, COUNT(*) AS total FROM appointments a
-       JOIN services s ON s.id = a.service_id ${where}
+       JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id ${where}
        GROUP BY s.id, s.name ORDER BY total DESC, s.name ASC LIMIT 6`, values
     );
     const [hourRows] = await pool.execute(
@@ -89,7 +84,8 @@ router.get('/dashboard', async (request, response, next) => {
        COALESCE(SUM(a.status = 'NO_SHOW'), 0) AS noShow,
        COALESCE(SUM(CASE WHEN a.status IN ('CONFIRMED', 'COMPLETED') THEN s.price ELSE 0 END), 0) AS revenue,
        COALESCE(SUM(CASE WHEN a.status IN ('PENDING', 'CONFIRMED', 'COMPLETED') THEN TIMESTAMPDIFF(MINUTE, a.starts_at, a.ends_at) ELSE 0 END), 0) AS occupiedMinutes
-       FROM appointments a JOIN barbers b ON b.id = a.barber_id JOIN services s ON s.id = a.service_id ${where}
+       FROM appointments a JOIN barbers b ON b.id = a.barber_id AND b.tenant_id = a.tenant_id
+       JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id ${where}
        GROUP BY b.id, b.display_name ORDER BY total DESC, b.display_name ASC LIMIT 8`, values
     );
     const [clientRows] = await pool.execute(
@@ -112,15 +108,21 @@ router.get('/dashboard', async (request, response, next) => {
   } catch (error) { return next(error); }
 });
 
-router.get('/users', async (_request, response, next) => {
+// Personas relacionadas con ESTA barbería: su personal (membresía) y los
+// clientes que reservaron en ella. Las cuentas son globales, pero una
+// barbería no ve a los clientes de otra.
+router.get('/users', async (request, response, next) => {
+  const tenantId = tenantIdOf(request);
   try {
     const [rows] = await pool.execute(
       `SELECT u.id, u.first_name AS firstName, u.last_name AS lastName, u.email, u.phone,
-       u.is_active AS isActive, r.name AS role, u.created_at AS createdAt,
-       COUNT(a.id) AS appointmentCount
+       u.is_active AS isActive, r.name AS role, m.role AS tenantRole, u.created_at AS createdAt,
+       (SELECT COUNT(*) FROM appointments a WHERE a.tenant_id = ? AND a.client_id = u.id) AS appointmentCount
        FROM users u JOIN roles r ON r.id = u.role_id
-       LEFT JOIN appointments a ON a.client_id = u.id
-       GROUP BY u.id, r.name ORDER BY u.created_at DESC`
+       LEFT JOIN tenant_memberships m ON m.user_id = u.id AND m.tenant_id = ?
+       WHERE m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM appointments a WHERE a.tenant_id = ? AND a.client_id = u.id)
+       ORDER BY u.created_at DESC`,
+      [tenantId, tenantId, tenantId]
     );
     return response.json({ users: rows });
   } catch (error) { return next(error); }
@@ -174,11 +176,35 @@ router.patch('/users/:id', async (request, response, next) => {
   const parsed = z.object({ isActive: z.boolean() }).safeParse(request.body);
   if (!id.success || !parsed.success) return response.status(400).json({ message: 'Usuario invalido' });
   if (String(id.data) === String(request.auth.sub) && !parsed.data.isActive) return response.status(400).json({ message: 'No puedes desactivar tu propia cuenta' });
+  const tenantId = tenantIdOf(request);
+  const connection = await pool.getConnection();
   try {
-    const [result] = await pool.execute('UPDATE users SET is_active = ? WHERE id = ?', [parsed.data.isActive, id.data]);
-    if (!result.affectedRows) return response.status(404).json({ message: 'Usuario no encontrado' });
+    await connection.beginTransaction();
+    // Solo se gestiona a personas relacionadas con esta barbería.
+    const [[relation]] = await connection.execute(
+      `SELECT
+         EXISTS (SELECT 1 FROM tenant_memberships WHERE tenant_id = ? AND user_id = ?) AS isMember,
+         EXISTS (SELECT 1 FROM appointments WHERE tenant_id = ? AND client_id = ?) AS isClient,
+         EXISTS (SELECT 1 FROM tenant_memberships WHERE tenant_id <> ? AND user_id = ?)
+           OR EXISTS (SELECT 1 FROM appointments WHERE tenant_id <> ? AND client_id = ?) AS usedElsewhere`,
+      [tenantId, id.data, tenantId, id.data, tenantId, id.data, tenantId, id.data]
+    );
+    if (!relation.isMember && !relation.isClient) { await connection.rollback(); return response.status(404).json({ message: 'Usuario no encontrado' }); }
+    // La cuenta es global: si la persona también usa otra barbería, bloquearla
+    // aquí le quitaría el acceso allá. Para el personal basta con la membresía.
+    if (relation.usedElsewhere && !relation.isMember) {
+      await connection.rollback();
+      return response.status(409).json({ message: 'Esta persona también es cliente de otra barbería; no se puede desactivar su cuenta desde aquí.' });
+    }
+    if (relation.isMember) {
+      await connection.execute('UPDATE tenant_memberships SET is_active = ? WHERE tenant_id = ? AND user_id = ?', [parsed.data.isActive, tenantId, id.data]);
+    }
+    if (!relation.usedElsewhere) {
+      await connection.execute('UPDATE users SET is_active = ? WHERE id = ?', [parsed.data.isActive, id.data]);
+    }
+    await connection.commit();
     return response.json({ message: 'Estado de usuario actualizado' });
-  } catch (error) { return next(error); }
+  } catch (error) { await connection.rollback(); return next(error); } finally { connection.release(); }
 });
 
 export default router;

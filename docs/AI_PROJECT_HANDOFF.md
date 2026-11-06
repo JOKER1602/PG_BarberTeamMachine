@@ -406,11 +406,29 @@ La migración se dividió en dos (ver `database/README.md`):
 - **Ninguna ruta usa todavía el middleware de tenant**: la API sigue siendo single-tenant hasta el Incremento 2.
 - `013` está **aplicada en la base local de desarrollo** (6 de noviembre de 2026): tenant `empyrean-studio`, 1 `OWNER` y 5 `BARBER`. Respaldo previo con `mysqldump` en `backups/` (carpeta ignorada por Git: contiene datos personales). `tenant_settings` queda vacía hasta `014`, que copia la configuración vigente.
 
-### Estado del Incremento 2 (en curso, 6 de noviembre de 2026)
+### Estado del Incremento 2 (backend completo, 6 de noviembre de 2026)
 
-**Entorno de desarrollo:** `backend/.env` apunta a la base copia `barber_team_machine_saas`, que tiene `013` y `014` aplicadas. La base original `barber_team_machine` quedó intacta (solo con `013`). Para volver a la versión single-tenant, comentar `DATABASE_NAME=barber_team_machine_saas` en `backend/.env`; ojo: el código actual de servicios, barberos y configuración ya exige `tenant_id`, así que contra la base original esas rutas fallan.
+**Entorno de desarrollo:** `backend/.env` apunta a la base copia `barber_team_machine_saas`, que tiene `013` y `014` aplicadas. La base original `barber_team_machine` quedó intacta (solo con `013`) y **ya no es compatible con el código**: toda la API exige `tenant_id`. Rama Git: `saas/incremento-2` (main sigue siendo la versión single-tenant).
 
-**Hecho (paso 3 del orden):**
+**Todo el backend está aislado.** Los 11 módulos de negocio (`services`, `barbers`, `settings`, `admin`, `barber`, `appointments`, `payments`, `reviews`, `notifications`, `recommendations`, `assistant`) filtran por `tenantIdOf(request)` y se publican en `/api/t/:tenantSlug/...`; las rutas antiguas `/api/...` atienden a `DEFAULT_TENANT_SLUG`. Solo `/api/auth` y `/api/health` son globales.
+
+**Hecho (paso 4):**
+- Citas: disponibilidad (también exige profesional activo), reserva, historial por barbería, agenda admin, reprogramar, cancelar, estados y notas.
+- Pagos: el comprobante pertenece a la barbería y se guarda en `uploads/payments/<tenant_id>/`; solo lo abre OWNER/ADMIN de esa barbería. Un comprobante de B no sirve para reservar en A. Los comprobantes anteriores conservan su ruta plana.
+- Reseñas, notificaciones (helper `services/notifications.js#notify`, exige tenant) y recordatorios (`schedule/cancelAppointmentReminders` exigen `tenantId`; el worker es global y cada trabajo hereda el tenant de su cita).
+- Panel admin y usuarios: métricas por barbería; la lista muestra su personal y los clientes que reservaron ahí. Desactivar a un cliente que también usa otra barbería responde 409 (la cuenta es global); al personal se le desactiva la membresía.
+- Portal del barbero: `requireTenantMembership('BARBER')` y sus citas dentro de la barbería.
+- Administrar (reprogramar/cancelar cualquier cita, estados) se decide con `isTenantAdmin(request)` (OWNER/ADMIN de la barbería de la URL), no con el rol global.
+- Guardia `test/tenant-isolation-routes.test.js`: ejecuta **las 45 rutas** de los 11 módulos con un `tenant_id` ajeno inyectado; falla si una consulta no filtra por el tenant de la URL, si se agrega una ruta o módulo sin cubrir. Encontró y obligó a corregir la cancelación de recordatorios sin filtro de tenant.
+- Prueba real sobre la base copia (ciclo completo en una barbería B con accesos desde A): 31/31 — disponibilidad, asistente, comprobante, reserva, aprobación, recordatorios, notificaciones, portal del barbero, atención, reseña, panel, usuarios y recomendaciones aislados. La prueba del paso 3 sigue 20/20.
+
+**Pendiente:**
+- Paso 2: API de plataforma para crear/suspender barberías (hoy se crean por SQL).
+- Paso 5: frontend con rutas `/t/:slug`; mientras tanto usa `/api/...` (barbería por defecto). El login todavía redirige por rol global (`users.role_id`), no por membresía.
+- `POST /appointments/multi` y `POST /payments/proof` aún exigen el rol global `CLIENTE`: personal de una barbería no puede reservar como cliente en otra.
+- Fotos de barberos y QR siguen en carpetas públicas sin prefijo por tenant.
+
+**Hecho antes (paso 3):**
 - `services` (y categorías), `barbers` (servicios asignados, horarios, bloqueos, foto, activación) y `settings` (ahora en `tenant_settings`, incluido el QR) filtran **todas** sus consultas por `tenantIdOf(request)`.
 - Se publican en `/api/t/:tenantSlug/...` y, durante la transición, en `/api/...` para la barbería por defecto `DEFAULT_TENANT_SLUG` (por eso el frontend no cambió).
 - La administración usa `requireTenantMembership(OWNER, ADMIN)` en lugar del rol global.
@@ -420,22 +438,16 @@ La migración se dividió en dos (ver `database/README.md`):
 - Pruebas: `test/tenant-isolation-routes.test.js` ejecuta cada ruta de esos módulos y falla si alguna consulta no filtra por el tenant de la URL o usa un `tenant_id` del navegador; también falla si se agrega una ruta sin cubrirla. Se comprobó que detecta un filtro eliminado.
 - Prueba real sobre la base copia con dos barberías y dos dueños: 20/20 (lecturas, ediciones, borrados y asignaciones cruzadas rechazados; `tenant_id` inyectado ignorado; suspendida → 403).
 
-**Regla:** un módulo solo se monta en `tenantApi` (`/api/t/:slug`) cuando todas sus consultas están aisladas. Lo pendiente queda solo en `/api/...` con la barbería por defecto.
-
-**Pendiente (paso 4) — hoy fallan contra la base copia** porque insertan filas sin `tenant_id`:
-- crear reservas (`POST /appointments/multi`) y subir comprobantes (`POST /payments/proof`);
-- crear reseñas, notificaciones y trabajos de recordatorio (cancelar, reprogramar o aprobar pagos insertan notificaciones);
-- además, sin aislar aún (solo lectura correcta mientras exista una sola barbería): disponibilidad, asistente, recomendaciones, panel y usuarios de administración, portal del barbero.
-- Los archivos subidos aún no usan prefijo por tenant.
+**Regla:** toda ruta o módulo nuevo de negocio debe filtrar por `tenantIdOf(request)` y agregarse a la guardia; la prueba falla si no.
 
 ### Orden obligatorio de implementación SaaS
 
 1. ✅ Middleware `resolveTenant` y `requireTenantMembership`; sesiones sin rol global fijo.
 2. API de plataforma para crear/activar/suspender tenants.
 3. ✅ Aislar servicios, barberos, horarios y bloqueos por `tenant_id` (más configuración y cuentas de barbero).
-4. Aislar citas, cobros, comprobantes, reseñas, notificaciones, recordatorios y analítica.
+4. ✅ Aislar citas, cobros, comprobantes, reseñas, notificaciones, recordatorios y analítica (más portal del barbero, asistente y recomendaciones).
 5. Actualizar frontend a rutas `/t/:slug/...`.
-6. Añadir pruebas negativas de cruce Tenant A → Tenant B.
+6. ✅ Añadir pruebas negativas de cruce Tenant A → Tenant B (guardia de 45 rutas + pruebas reales 20/20 y 31/31).
 7. Aplicar `014` con backup y ventana de mantenimiento (`013` puede aplicarse antes).
 8. Agregar planes, límites, suscripciones, prueba gratuita y facturación.
 
