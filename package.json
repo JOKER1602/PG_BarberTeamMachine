@@ -2,7 +2,7 @@
   "name": "barber-team-machine",
   "version": "0.1.0",
   "private": true,
-  "description": "Sistema web inteligente para la gestion de Barber Team Machine",
+  "description": "Sistema web inteligente para la gestión de reservas de Empyrean Studio",
   "workspaces": [
     "backend",
     "frontend"
@@ -10,7 +10,9 @@
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace backend\" \"npm run dev --workspace frontend\"",
     "install:all": "npm install",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:smoke": "node scripts/smoke-api.mjs",
+    "verify": "npm run test && npm run build --workspace frontend"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

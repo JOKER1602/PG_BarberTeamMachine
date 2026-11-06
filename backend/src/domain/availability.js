@@ -1,3 +1,5 @@
+import { zonedParts } from '../config/time.js';
+
 export function overlaps(startA, endA, startB, endB) {
   return new Date(startA) < new Date(endB) && new Date(endA) > new Date(startB);
 }
@@ -30,4 +32,3 @@ export function isSlotAvailable({ startAt, endAt, workingHours, blocks, appointm
 
   return { available: true };
 }
-import { zonedParts } from '../config/time.js';

@@ -3,18 +3,28 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import pool from '../config/database.js';
-import { createAccessToken, requireAuth } from '../middleware/auth.js';
+import { clearAuthCookie, requireAuth, setAuthCookie } from '../middleware/auth.js';
 import { isEmailConfigured, sendPasswordResetEmail } from '../services/email.js';
+import { normalizeBolivianPhone } from '../services/whatsapp.js';
 
 const router = Router();
+const emailSchema = z.string().email().transform((value) => value.toLowerCase().trim());
+const personNameSchema = z.string().trim().min(2).max(80)
+  .regex(/^[\p{L}]+(?:[ '-][\p{L}]+)*$/u, 'Ingresa solo letras y un espacio, guion o apóstrofe entre nombres');
+const securePasswordSchema = z.string().min(8)
+  .regex(/[a-z]/, 'Incluye una letra minúscula')
+  .regex(/[A-Z]/, 'Incluye una letra mayúscula')
+  .regex(/\d/, 'Incluye al menos un número');
 const credentialsSchema = z.object({
-  email: z.string().email().transform((value) => value.toLowerCase().trim()),
+  email: emailSchema,
   password: z.string().min(8)
 });
-const registrationSchema = credentialsSchema.extend({
-  firstName: z.string().trim().min(2).max(80),
-  lastName: z.string().trim().min(2).max(80),
-  phone: z.string().trim().max(30).optional()
+const registrationSchema = z.object({
+  firstName: personNameSchema,
+  lastName: personNameSchema,
+  phone: z.string().regex(/^[67]\d{7}$/, 'Ingresa un celular boliviano válido de 8 dígitos'),
+  email: emailSchema,
+  password: securePasswordSchema
 });
 
 function publicUser(user) {
@@ -24,6 +34,8 @@ function publicUser(user) {
     lastName: user.last_name,
     email: user.email,
     phone: user.phone,
+    whatsappConsent: Boolean(user.whatsapp_opt_in_at),
+    mustChangePassword: Boolean(user.must_change_password),
     role: user.role
   };
 }
@@ -45,16 +57,17 @@ router.post('/register', async (request, response, next) => {
     const [result] = await pool.execute(
       `INSERT INTO users (role_id, first_name, last_name, email, phone, password_hash)
        SELECT id, ?, ?, ?, ?, ? FROM roles WHERE name = 'CLIENTE'`,
-      [firstName, lastName, email, phone ?? null, passwordHash]
+      [firstName, lastName, email, phone, passwordHash]
     );
     const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, r.name AS role
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.whatsapp_opt_in_at, r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`,
       [result.insertId]
     );
     const user = rows[0];
 
-    return response.status(201).json({ user: publicUser(user), token: createAccessToken(user) });
+    setAuthCookie(response, user);
+    return response.status(201).json({ user: publicUser(user) });
   } catch (error) {
     return next(error);
   }
@@ -68,7 +81,7 @@ router.post('/login', async (request, response, next) => {
 
   try {
     const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.password_hash, u.is_active,
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.whatsapp_opt_in_at, u.must_change_password, u.password_hash, u.is_active,
               r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.email = ?`,
       [parsed.data.email]
@@ -80,16 +93,22 @@ router.post('/login', async (request, response, next) => {
       return response.status(401).json({ message: 'Correo o contrasena incorrectos' });
     }
 
-    return response.json({ user: publicUser(user), token: createAccessToken(user) });
+    setAuthCookie(response, user);
+    return response.json({ user: publicUser(user) });
   } catch (error) {
     return next(error);
   }
 });
 
+router.post('/logout', (_request, response) => {
+  clearAuthCookie(response);
+  return response.status(204).end();
+});
+
 router.get('/me', requireAuth, async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.is_active, r.name AS role
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.whatsapp_opt_in_at, u.must_change_password, u.is_active, r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`,
       [request.auth.sub]
     );
@@ -106,33 +125,56 @@ router.get('/me', requireAuth, async (request, response, next) => {
 
 router.patch('/me', requireAuth, async (request, response, next) => {
   const parsed = z.object({
-    firstName: z.string().trim().min(2).max(80),
-    lastName: z.string().trim().min(2).max(80),
-    phone: z.string().trim().max(30).nullable().optional()
+    firstName: personNameSchema,
+    lastName: personNameSchema,
+    phone: z.string().trim().max(30).nullable().optional(),
+    whatsappConsent: z.boolean().optional()
   }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de perfil invalidos' });
+  if (parsed.data.whatsappConsent) {
+    try { normalizeBolivianPhone(parsed.data.phone); }
+    catch (error) { return response.status(400).json({ message: error.message }); }
+  }
+  let connection;
   try {
-    await pool.execute(
-      'UPDATE users SET first_name = ?, last_name = ?, phone = ? WHERE id = ?',
-      [parsed.data.firstName, parsed.data.lastName, parsed.data.phone ?? null, request.auth.sub]
+    connection = await pool.getConnection();
+    await connection.beginTransaction();
+    await connection.execute(
+      `UPDATE users SET first_name = ?, last_name = ?,
+       whatsapp_opt_in_at = CASE
+         WHEN ? = 1 AND (whatsapp_opt_in_at IS NULL OR NOT (phone <=> ?)) THEN UTC_TIMESTAMP()
+         WHEN ? = 0 OR NOT (phone <=> ?) THEN NULL ELSE whatsapp_opt_in_at END,
+       phone = ? WHERE id = ?`,
+      [parsed.data.firstName, parsed.data.lastName, parsed.data.whatsappConsent === undefined ? -1 : Number(parsed.data.whatsappConsent), parsed.data.phone ?? null, parsed.data.whatsappConsent === undefined ? -1 : Number(parsed.data.whatsappConsent), parsed.data.phone ?? null, parsed.data.phone ?? null, request.auth.sub]
     );
-    const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, r.name AS role
+    if (parsed.data.whatsappConsent) {
+      await connection.execute(
+        `INSERT INTO reminder_jobs (appointment_id, channel, reminder_type, scheduled_at, status)
+         SELECT id, 'WHATSAPP', '2H', DATE_SUB(starts_at, INTERVAL 2 HOUR), 'PENDING'
+         FROM appointments WHERE client_id = ? AND status = 'CONFIRMED' AND starts_at >= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 2 HOUR)
+         ON DUPLICATE KEY UPDATE scheduled_at = VALUES(scheduled_at), status = IF(reminder_jobs.status = 'CANCELLED', 'PENDING', reminder_jobs.status)`,
+        [request.auth.sub]
+      );
+    }
+    const [rows] = await connection.execute(
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.whatsapp_opt_in_at, r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`, [request.auth.sub]
     );
+    await connection.commit();
     return response.json({ user: publicUser(rows[0]) });
-  } catch (error) { return next(error); }
+  } catch (error) { if (connection) await connection.rollback(); return next(error); }
+  finally { connection?.release(); }
 });
 
 router.patch('/me/password', requireAuth, async (request, response, next) => {
-  const parsed = z.object({ currentPassword: z.string().min(8), password: z.string().min(8) }).safeParse(request.body);
+  const parsed = z.object({ currentPassword: z.string().min(8), password: securePasswordSchema }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de contrasena invalidos' });
   try {
     const [rows] = await pool.execute('SELECT password_hash FROM users WHERE id = ?', [request.auth.sub]);
     if (!rows[0] || !(await bcrypt.compare(parsed.data.currentPassword, rows[0].password_hash))) {
       return response.status(400).json({ message: 'La contrasena actual no es correcta' });
     }
-    await pool.execute('UPDATE users SET password_hash = ? WHERE id = ?', [await bcrypt.hash(parsed.data.password, 12), request.auth.sub]);
+    await pool.execute('UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?', [await bcrypt.hash(parsed.data.password, 12), request.auth.sub]);
     return response.json({ message: 'Contrasena actualizada correctamente' });
   } catch (error) { return next(error); }
 });
@@ -174,7 +216,7 @@ router.post('/forgot-password', async (request, response, next) => {
 router.post('/reset-password', async (request, response, next) => {
   const parsed = z.object({
     token: z.string().length(64),
-    password: z.string().min(8)
+    password: securePasswordSchema
   }).safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Datos de recuperacion invalidos' });
@@ -192,7 +234,7 @@ router.post('/reset-password', async (request, response, next) => {
     }
 
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
-    await pool.execute('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, rows[0].user_id]);
+    await pool.execute('UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?', [passwordHash, rows[0].user_id]);
     await pool.execute('UPDATE password_reset_tokens SET used_at = UTC_TIMESTAMP() WHERE token_hash = ?', [tokenHash]);
     return response.json({ message: 'Contrasena actualizada correctamente' });
   } catch (error) {

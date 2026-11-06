@@ -1,4 +1,4 @@
-# Barber Team Machine
+# Empyrean Studio
 
 ## Arquitectura inicial
 
@@ -15,7 +15,7 @@
 4. El asistente interpreta solicitudes, pero no confirma reservas fuera del flujo normal.
 5. La primera version atiende una sola barberia.
 
-## Fases 1 a 4 implementadas
+## Fases 1 a 8 implementadas
 
 - Autenticación con JWT, contraseñas cifradas y roles `CLIENTE`/`ADMINISTRADOR`.
 - Gestión administrativa de usuarios, servicios, barberos y la relación barbero-servicio.
@@ -31,6 +31,36 @@
 - Reseñas verificadas: solo se habilitan para el cliente después de una cita `COMPLETED`, una reseña por cita.
 - Recordatorios en aplicación y por correo, con reintentos y registro de fallos. El canal de correo se activa al configurar SMTP.
 - Limpieza del flujo de reservas: existe una sola ruta de creación (`POST /api/appointments/multi`) y una sola experiencia de reserva con pago, para evitar reservas sin comprobante.
+
+## Fase 5: recomendación inteligente y personalización
+
+- El cliente autenticado recibe servicios sugeridos desde sus citas atendidas; si todavía no tiene historial, se muestran los servicios más reservados.
+- Para los servicios ya elegidos se generan horarios sugeridos únicamente desde disponibilidad real: jornada laboral, bloqueos, duración total y citas activas.
+- Las alternativas se ordenan por preferencias observables del cliente (profesional, día y franja horaria frecuentes) y explican por qué se proponen.
+- La recomendación es determinista y auditable. No crea ni confirma citas: el cliente debe seleccionar el horario y el flujo normal vuelve a validarlo antes de reservar.
+
+## Fase 6: asistente inteligente de reservas
+
+- En `/reservar` el cliente puede consultar en lenguaje natural, por ejemplo: “Quiero un corte mañana con Andy después de las 4”.
+- El asistente identifica de forma determinista el servicio, profesional, fecha y hora cuando están presentes en la consulta.
+- Las alternativas se calculan exclusivamente con disponibilidad real; no se generan citas ni se apartan horarios desde el asistente.
+- Al elegir una alternativa se abre el flujo normal con el servicio, profesional, fecha y horario precargados. El pago, la validación y la confirmación continúan siendo obligatorios.
+
+## Fase 7: analítica, visualización y reportes
+
+- El panel administrativo incorpora filtros combinables por período, servicio y profesional. Los mismos filtros se aplican a indicadores, gráficos, agenda y exportación.
+- Se visualizan citas registradas, atendidas, canceladas, inasistencias, ingresos confirmados, ingresos atendidos, tiempo ocupado y clientes recurrentes.
+- El administrador puede analizar servicios más solicitados, horas de mayor demanda, evolución diaria de reservas, carga por profesional y clientes recurrentes.
+- El reporte CSV incluye los filtros aplicados, el resumen de indicadores y el detalle de las citas para apoyar decisiones y conservar evidencia del período analizado.
+
+## Fase 8: pruebas y evaluación
+
+- El plan de pruebas reúne casos funcionales, de integración, autorización, usabilidad SUS y rendimiento para los tres roles del sistema.
+- La matriz de trazabilidad relaciona el alcance académico con los módulos y evidencias de validación.
+- La regresión automatizada protege disponibilidad, autorización, analítica, comprensión del asistente, sesión del cliente y rutas HTTP básicas; la compilación del cliente se valida antes de cada versión candidata.
+- Se incorpora un smoke test opcional con k6 para consultas públicas de solo lectura, con umbrales de errores y tiempo de respuesta documentados.
+- Los criterios de salida, severidades y evidencia requerida están definidos en `docs/PHASE_8_TEST_PLAN.md`.
+- La evidencia de la última regresión automatizada se conserva en `docs/PHASE_8_AUTOMATED_EVIDENCE.md`.
 
 ## Ejecución local
 

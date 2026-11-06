@@ -2,9 +2,10 @@ import { Router } from 'express';
 import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import pool from '../config/database.js';
-import { isSlotAvailable } from '../domain/availability.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import { barberDayRange, zonedParts } from '../config/time.js';
+import { findAvailableSlotsForDate, loadAvailability, loadMultiAvailability, sqlDateTime } from '../services/appointment-availability.js';
+import { isSlotAvailable } from '../domain/availability.js';
+import { localDateFilterBounds } from '../config/time.js';
 import { cancelAppointmentReminders, scheduleAppointmentReminders } from '../services/reminders.js';
 
 const router = Router();
@@ -18,67 +19,11 @@ const multiBookingSchema = z.object({
   barberId: z.coerce.number().int().positive(),
   serviceIds: z.array(z.coerce.number().int().positive()).min(1).max(10),
   startsAt: z.string().datetime({ offset: true }),
-  paymentProofUrl: z.string().url()
+  paymentProofId: z.string().uuid()
 });
-const activeStatuses = ['PENDING', 'CONFIRMED'];
-
-function sqlDateTime(date) {
-  return date.toISOString().slice(0, 19).replace('T', ' ');
-}
-
 async function acquireBarberLock(connection, barberId) {
   const [rows] = await connection.execute('SELECT GET_LOCK(?, 10) AS acquired', [`barber-team-machine-barber-${barberId}`]);
   return Number(rows[0]?.acquired) === 1;
-}
-
-async function loadAvailability(connection, barberId, serviceId, startAt, endAt) {
-  const weekday = zonedParts(startAt).weekday;
-  const [serviceRows] = await connection.execute(
-    `SELECT s.id, s.duration_minutes AS durationMinutes, s.price
-     FROM services s JOIN barber_services bs ON bs.service_id = s.id
-     WHERE s.id = ? AND s.is_active = TRUE AND bs.barber_id = ?`,
-    [serviceId, barberId]
-  );
-  if (serviceRows.length === 0) {
-    return { service: null, workingHours: [], blocks: [], appointments: [] };
-  }
-
-  const [workingHours] = await connection.execute(
-    `SELECT weekday, TIME_TO_SEC(start_time) DIV 60 AS start_minutes,
-            TIME_TO_SEC(end_time) DIV 60 AS end_minutes
-     FROM barber_working_hours
-     WHERE barber_id = ? AND weekday = ? AND is_active = TRUE`,
-    [barberId, weekday]
-  );
-  const [blocks] = await connection.execute(
-    `SELECT starts_at, ends_at FROM schedule_blocks
-     WHERE barber_id = ? AND starts_at < ? AND ends_at > ?`,
-    [barberId, sqlDateTime(endAt), sqlDateTime(startAt)]
-  );
-  const [appointments] = await connection.execute(
-    `SELECT id, starts_at, ends_at FROM appointments
-     WHERE barber_id = ? AND status IN (?, ?) AND starts_at < ? AND ends_at > ?`,
-    [barberId, ...activeStatuses, sqlDateTime(endAt), sqlDateTime(startAt)]
-  );
-
-  return { service: serviceRows[0], workingHours, blocks, appointments };
-}
-
-async function loadMultiAvailability(connection, barberId, serviceIds, startAt, endAt) {
-  const uniqueServiceIds = [...new Set(serviceIds)];
-  const base = await loadAvailability(connection, barberId, uniqueServiceIds[0], startAt, endAt);
-  if (!base.service) return { ...base, services: null, durationMinutes: 0 };
-  const placeholders = uniqueServiceIds.map(() => '?').join(', ');
-  const [services] = await connection.execute(
-    `SELECT s.id, s.duration_minutes AS durationMinutes, s.price
-     FROM services s JOIN barber_services bs ON bs.service_id = s.id
-     WHERE s.id IN (${placeholders}) AND s.is_active = TRUE AND bs.barber_id = ?`,
-    [...uniqueServiceIds, barberId]
-  );
-  if (services.length !== uniqueServiceIds.length) return { ...base, services: null, durationMinutes: 0 };
-  const byId = new Map(services.map((service) => [String(service.id), service]));
-  const orderedServices = uniqueServiceIds.map((id) => byId.get(String(id)));
-  return { ...base, services: orderedServices, durationMinutes: orderedServices.reduce((total, service) => total + service.durationMinutes, 0) };
 }
 
 router.get('/availability', async (request, response, next) => {
@@ -92,22 +37,10 @@ router.get('/availability', async (request, response, next) => {
     const serviceIds = parsed.data.serviceIds ? parsed.data.serviceIds.split(',').map(Number) : [parsed.data.serviceId];
     const connection = await pool.getConnection();
     try {
-      const { start: dayStart, end: dayEnd } = barberDayRange(date);
-      const availability = await loadMultiAvailability(connection, barberId, serviceIds, dayStart, dayEnd);
-      if (!availability.services) {
+      const slots = await findAvailableSlotsForDate(connection, { barberId, serviceIds, date });
+      if (!slots) {
         return response.status(404).json({ message: 'El barbero no realiza todos los servicios seleccionados' });
       }
-
-      const slots = [];
-      for (let minute = 0; minute < 24 * 60; minute += 15) {
-        const startAt = new Date(dayStart.getTime() + minute * 60_000);
-        const endAt = new Date(startAt.getTime() + availability.durationMinutes * 60_000);
-        const result = isSlotAvailable({ ...availability, startAt, endAt });
-        if (result.available) {
-          slots.push({ startsAt: startAt.toISOString(), endsAt: endAt.toISOString() });
-        }
-      }
-
       return response.json({ slots });
     } finally {
       connection.release();
@@ -119,15 +52,23 @@ router.get('/availability', async (request, response, next) => {
 
 router.use(requireAuth);
 
-router.post('/multi', async (request, response, next) => {
+router.post('/multi', requireRole('CLIENTE'), async (request, response, next) => {
   const parsed = multiBookingSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de las citas invalidos', errors: parsed.error.flatten() });
   const connection = await pool.getConnection();
   try {
-    const { barberId, startsAt, paymentProofUrl } = parsed.data;
+    const { barberId, startsAt, paymentProofId } = parsed.data;
     const serviceIds = [...new Set(parsed.data.serviceIds)];
     const startAt = new Date(startsAt);
     await connection.beginTransaction();
+    const [proofRows] = await connection.execute(
+      'SELECT id FROM payment_proofs WHERE id = ? AND client_id = ? AND used_at IS NULL FOR UPDATE',
+      [paymentProofId, request.auth.sub]
+    );
+    if (!proofRows.length) {
+      await connection.rollback();
+      return response.status(400).json({ message: 'El comprobante no existe, no te pertenece o ya fue utilizado.' });
+    }
     if (!await acquireBarberLock(connection, barberId)) {
       await connection.rollback();
       return response.status(409).json({ message: 'La disponibilidad se está actualizando. Intenta nuevamente.' });
@@ -146,22 +87,25 @@ router.post('/multi', async (request, response, next) => {
       return response.status(409).json({ message: `Horario no disponible: ${result.reason}` });
     }
     const totalAmount = finalAvailability.services.reduce((total, service) => total + Number(service.price ?? 0), 0);
+    const depositAmount = Math.round(totalAmount * 50) / 100;
     const paymentReference = randomUUID();
+    const paymentProofUrl = `${request.protocol}://${request.get('host')}/api/payments/proofs/${paymentProofId}`;
     const ids = [];
     let serviceStart = startAt;
     for (const service of finalAvailability.services) {
       const serviceEnd = new Date(serviceStart.getTime() + service.durationMinutes * 60_000);
       const [created] = await connection.execute(
         `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, payment_reference, payment_proof_url, payment_amount, updated_by) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)`,
-        [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), paymentReference, paymentProofUrl, totalAmount, request.auth.sub]
+        [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), paymentReference, paymentProofUrl, depositAmount, request.auth.sub]
       );
       ids.push(created.insertId);
       serviceStart = serviceEnd;
     }
     await connection.execute(
-      `INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, 'PAYMENT_PENDING', 'Pago pendiente de revisión', ?)`,
-      [request.auth.sub, ids[0], `Recibimos tu comprobante por Bs ${totalAmount.toFixed(2)}. Confirmaremos tu cita cuando el pago sea revisado.`]
+      `INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, 'PAYMENT_PENDING', 'Anticipo en revisión', ?)`,
+      [request.auth.sub, ids[0], `Recibimos tu comprobante de anticipo por Bs ${depositAmount.toFixed(2)}. Confirmaremos tu cita cuando el pago sea revisado.`]
     );
+    await connection.execute('UPDATE payment_proofs SET used_at = UTC_TIMESTAMP() WHERE id = ?', [paymentProofId]);
     await connection.commit();
     return response.status(201).json({ ids, paymentReference, status: 'PENDING' });
   } catch (error) {
@@ -173,12 +117,14 @@ router.post('/multi', async (request, response, next) => {
   }
 });
 
-router.get('/mine', async (request, response, next) => {
+router.get('/mine', requireRole('CLIENTE'), async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
             `SELECT a.id, a.barber_id AS barberId, a.service_id AS serviceId,
-              a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.payment_reference AS paymentReference, a.payment_amount AS paymentAmount, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt,
-              s.name AS serviceName, s.price AS price, b.display_name AS barberName, b.photo_url AS barberPhotoUrl,
+              a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancellation_reason AS cancellationReason, a.payment_reference AS paymentReference, a.payment_amount AS paymentAmount, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt,
+              s.name AS serviceName, s.price AS price,
+              COALESCE((SELECT SUM(s2.price) FROM appointments a2 JOIN services s2 ON s2.id = a2.service_id WHERE a2.client_id = a.client_id AND a2.payment_reference = a.payment_reference), s.price) AS bookingTotal,
+              b.display_name AS barberName, b.photo_url AS barberPhotoUrl,
               r.id AS reviewId, r.rating AS reviewRating
        FROM appointments a
        JOIN services s ON s.id = a.service_id
@@ -203,8 +149,9 @@ router.get('/admin', requireRole('ADMINISTRADOR'), async (request, response, nex
   }).safeParse(request.query);
   if (!filters.success) return response.status(400).json({ message: 'Filtros invalidos' });
   const clauses = []; const values = [];
-  if (filters.data.dateFrom) { clauses.push('a.starts_at >= ?'); values.push(`${filters.data.dateFrom} 00:00:00`); }
-  if (filters.data.dateTo) { clauses.push('a.starts_at < DATE_ADD(?, INTERVAL 1 DAY)'); values.push(filters.data.dateTo); }
+  const bounds = localDateFilterBounds(filters.data);
+  if (bounds.from) { clauses.push('a.starts_at >= ?'); values.push(bounds.from); }
+  if (bounds.toExclusive) { clauses.push('a.starts_at < ?'); values.push(bounds.toExclusive); }
   for (const [key, column] of [['barberId', 'a.barber_id'], ['serviceId', 'a.service_id'], ['status', 'a.status']]) if (filters.data[key]) { clauses.push(`${column} = ?`); values.push(filters.data[key]); }
   try {
     const [rows] = await pool.execute(
@@ -233,10 +180,11 @@ router.patch('/:id/reschedule', async (request, response, next) => {
   try {
     await connection.beginTransaction();
     const [appointmentRows] = await connection.execute(
-      `SELECT id, client_id AS clientId, barber_id AS barberId, service_id AS serviceId, status
+      `SELECT id, client_id AS clientId, barber_id AS barberId, service_id AS serviceId, status, payment_reference AS paymentReference
        FROM appointments WHERE id = ? AND (client_id = ? OR ? = 'ADMINISTRADOR')
-       AND status = 'CONFIRMED'`,
-      [id.data, request.auth.sub, request.auth.role]
+       AND status = 'CONFIRMED'
+       AND (? = 'ADMINISTRADOR' OR starts_at > UTC_TIMESTAMP())`,
+      [id.data, request.auth.sub, request.auth.role, request.auth.role]
     );
     if (appointmentRows.length === 0) {
       await connection.rollback();
@@ -248,15 +196,26 @@ router.patch('/:id/reschedule', async (request, response, next) => {
       await connection.rollback();
       return response.status(409).json({ message: 'La disponibilidad se está actualizando. Intenta nuevamente.' });
     }
+    // Una reserva de varios servicios se mueve completa: los servicios se
+    // encadenan desde el nuevo inicio, en el mismo orden que tenían.
+    const { clientId, paymentReference } = appointmentRows[0];
+    const [bookingRows] = await connection.execute(
+      `SELECT a.id, a.service_id AS serviceId, s.duration_minutes AS durationMinutes
+       FROM appointments a JOIN services s ON s.id = a.service_id
+       WHERE ${paymentReference ? 'a.payment_reference = ? AND a.client_id = ? AND a.barber_id = ? AND a.status = \'CONFIRMED\'' : 'a.id = ?'}
+       ORDER BY a.starts_at, a.id FOR UPDATE`,
+      paymentReference ? [paymentReference, clientId, barberId] : [id.data]
+    );
+    const bookingIds = bookingRows.map((row) => row.id);
     const startAt = new Date(body.data.startsAt);
-    const [serviceRows] = await connection.execute('SELECT duration_minutes AS durationMinutes FROM services WHERE id = ?', [appointmentRows[0].serviceId]);
-    const endAt = new Date(startAt.getTime() + serviceRows[0].durationMinutes * 60_000);
-    const availability = await loadAvailability(connection, barberId, appointmentRows[0].serviceId, startAt, endAt);
+    const totalMinutes = bookingRows.reduce((total, row) => total + row.durationMinutes, 0);
+    const endAt = new Date(startAt.getTime() + totalMinutes * 60_000);
+    const availability = await loadAvailability(connection, barberId, bookingRows[0].serviceId, startAt, endAt);
     const result = isSlotAvailable({
       ...availability,
       startAt,
       endAt,
-      appointments: availability.appointments.filter((appointment) => appointment.id !== id.data)
+      appointments: availability.appointments.filter((appointment) => !bookingIds.includes(appointment.id))
     });
     if (!result.available) {
       await connection.rollback();
@@ -264,19 +223,24 @@ router.patch('/:id/reschedule', async (request, response, next) => {
     }
 
     const nextStatus = 'CONFIRMED';
-    await connection.execute(
-      `UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?, updated_by = ? WHERE id = ?`,
-      [sqlDateTime(startAt), sqlDateTime(endAt), nextStatus, request.auth.sub, id.data]
-    );
-    await cancelAppointmentReminders(connection, id.data);
-    await scheduleAppointmentReminders(connection, id.data);
+    let serviceStart = startAt;
+    for (const row of bookingRows) {
+      const serviceEnd = new Date(serviceStart.getTime() + row.durationMinutes * 60_000);
+      await connection.execute(
+        `UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?, updated_by = ? WHERE id = ?`,
+        [sqlDateTime(serviceStart), sqlDateTime(serviceEnd), nextStatus, request.auth.sub, row.id]
+      );
+      await cancelAppointmentReminders(connection, row.id);
+      await scheduleAppointmentReminders(connection, row.id);
+      serviceStart = serviceEnd;
+    }
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
        VALUES (?, ?, 'APPOINTMENT_RESCHEDULED', 'Cita reprogramada', ?)`,
-      [appointmentRows[0].clientId, id.data, 'Tu nueva fecha quedó confirmada.']
+      [clientId, bookingIds[0], 'Tu nueva fecha quedó confirmada.']
     );
     await connection.commit();
-    return response.json({ message: 'Cita reprogramada y confirmada', status: nextStatus });
+    return response.json({ message: bookingIds.length > 1 ? 'Reserva reprogramada y confirmada' : 'Cita reprogramada y confirmada', status: nextStatus, rescheduledIds: bookingIds });
   } catch (error) {
     await connection.rollback();
     return next(error);
@@ -300,31 +264,41 @@ router.patch('/:id/cancel', async (request, response, next) => {
     const [appointmentRows] = await connection.execute(
       `SELECT client_id AS clientId, payment_reference AS paymentReference
        FROM appointments WHERE id = ? AND (client_id = ? OR ? = 'ADMINISTRADOR')
-       AND status IN ('PENDING', 'CONFIRMED') FOR UPDATE`,
-      [parsed.data, request.auth.sub, request.auth.role]
+       AND status IN ('PENDING', 'CONFIRMED')
+       AND (? = 'ADMINISTRADOR' OR starts_at > UTC_TIMESTAMP()) FOR UPDATE`,
+      [parsed.data, request.auth.sub, request.auth.role, request.auth.role]
     );
     if (!appointmentRows.length) {
       await connection.rollback();
       return response.status(404).json({ message: 'Cita no encontrada o no cancelable' });
     }
     const appointment = appointmentRows[0];
-    const groupCondition = appointment.paymentReference ? 'payment_reference = ? AND status = \'PENDING\'' : 'id = ?';
-    const groupValue = appointment.paymentReference ?? parsed.data;
+    // Una reserva con anticipo agrupa varios servicios bajo payment_reference.
+    // Se cancela completa, tanto si el anticipo sigue en revisión como si ya
+    // fue confirmada; solo se excluyen citas ya atendidas, canceladas o pasadas.
+    const [cancellable] = await connection.execute(
+      appointment.paymentReference
+        ? `SELECT id FROM appointments
+           WHERE payment_reference = ? AND client_id = ? AND status IN ('PENDING', 'CONFIRMED')
+           AND (? = 'ADMINISTRADOR' OR starts_at > UTC_TIMESTAMP()) FOR UPDATE`
+        : 'SELECT id FROM appointments WHERE id = ?',
+      appointment.paymentReference
+        ? [appointment.paymentReference, appointment.clientId, request.auth.role]
+        : [parsed.data]
+    );
+    const cancelledIds = cancellable.map((row) => row.id);
     await connection.execute(
-      `UPDATE appointments SET status = 'CANCELLED', cancellation_reason = ?, cancelled_at = UTC_TIMESTAMP(), updated_by = ? WHERE ${groupCondition}`,
-      [body.data.reason ?? null, request.auth.sub, groupValue]
+      `UPDATE appointments SET status = 'CANCELLED', cancellation_reason = ?, cancelled_at = UTC_TIMESTAMP(), updated_by = ?
+       WHERE id IN (${cancelledIds.map(() => '?').join(', ')})`,
+      [body.data.reason ?? null, request.auth.sub, ...cancelledIds]
     );
-    const [cancelledAppointments] = await connection.execute(
-      `SELECT id, client_id AS clientId FROM appointments WHERE ${appointment.paymentReference ? 'payment_reference = ?' : 'id = ?'}`,
-      [groupValue]
-    );
-    for (const cancelled of cancelledAppointments) await cancelAppointmentReminders(connection, cancelled.id);
+    for (const cancelledId of cancelledIds) await cancelAppointmentReminders(connection, cancelledId);
     await connection.execute(
       `INSERT INTO notifications (user_id, appointment_id, type, title, message)
        VALUES (?, ?, 'APPOINTMENT_CANCELLED', 'Cita cancelada', 'Tu cita fue cancelada')`, [appointment.clientId, parsed.data]
     );
     await connection.commit();
-    return response.json({ message: appointment.paymentReference ? 'Reserva cancelada' : 'Cita cancelada' });
+    return response.json({ message: cancelledIds.length > 1 ? 'Reserva cancelada' : 'Cita cancelada', cancelledIds });
   } catch (error) {
     await connection.rollback();
     return next(error);
@@ -342,7 +316,7 @@ router.patch('/:id/status', requireRole('ADMINISTRADOR'), async (request, respon
     if (!rows.length) { await connection.rollback(); return response.status(404).json({ message: 'Cita no encontrada o no actualizable' }); }
     if (rows[0].status === 'PENDING' && rows[0].paymentReference && !['CONFIRMED', 'CANCELLED'].includes(parsed.data.status)) {
       await connection.rollback();
-      return response.status(400).json({ message: 'Primero aprueba o rechaza el pago antes de cambiar esta cita.' });
+      return response.status(400).json({ message: 'Primero aprueba o rechaza el anticipo antes de cambiar esta cita.' });
     }
     const isPaymentDecision = rows[0].status === 'PENDING' && rows[0].paymentReference && ['CONFIRMED', 'CANCELLED'].includes(parsed.data.status);
     const groupCondition = isPaymentDecision ? 'payment_reference = ? AND status = \'PENDING\'' : 'id = ?';

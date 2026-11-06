@@ -14,6 +14,12 @@ function smtpConfiguration() {
   };
 }
 
+// Nombres, servicios y datos del negocio los escriben usuarios o administradores.
+// Se escapan antes de insertarlos en el HTML del correo.
+export function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
+}
+
 export function isEmailConfigured() {
   return Boolean(smtpConfiguration());
 }
@@ -26,13 +32,13 @@ export async function sendPasswordResetEmail({ to, firstName, resetUrl }) {
   await transport.sendMail({
     from: config.from,
     to,
-    subject: 'Restablece tu contraseña | Barber Team Machine',
+    subject: 'Restablece tu contraseña | Empyrean Studio',
     text: `Hola ${firstName || ''},\n\nSolicitaste restablecer tu contraseña. Usa este enlace dentro de los próximos 30 minutos:\n${resetUrl}\n\nSi no hiciste esta solicitud, puedes ignorar este correo.`,
     html: `<main style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px;color:#151515">
-      <p style="font-size:12px;letter-spacing:1.5px;color:#3569ee;font-weight:700">BARBER TEAM MACHINE</p>
+      <p style="font-size:12px;letter-spacing:1.5px;color:#3569ee;font-weight:700">EMPYREAN STUDIO</p>
       <h1 style="font-size:26px">Restablece tu contraseña</h1>
-      <p>Hola ${firstName || ''}, recibimos una solicitud para cambiar la contraseña de tu cuenta.</p>
-      <p style="margin:28px 0"><a href="${resetUrl}" style="display:inline-block;padding:14px 22px;background:#3569ee;color:#fff;text-decoration:none;border-radius:8px;font-weight:700">Crear nueva contraseña</a></p>
+      <p>Hola ${escapeHtml(firstName)}, recibimos una solicitud para cambiar la contraseña de tu cuenta.</p>
+      <p style="margin:28px 0"><a href="${escapeHtml(resetUrl)}"style="display:inline-block;padding:14px 22px;background:#3569ee;color:#fff;text-decoration:none;border-radius:8px;font-weight:700">Crear nueva contraseña</a></p>
       <p style="color:#5e626d;font-size:13px">Este enlace vence en 30 minutos. Si no solicitaste el cambio, puedes ignorar este correo.</p>
     </main>`
   });
@@ -43,11 +49,16 @@ export async function sendAppointmentReminderEmail({ to, firstName, appointment,
   if (!config) throw new Error('El correo SMTP no está configurado');
   const transport = nodemailer.createTransport(config);
   const when = new Date(appointment.startsAt).toLocaleString('es-BO', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/La_Paz' });
+  const safe = {
+    firstName: escapeHtml(firstName), serviceName: escapeHtml(appointment.serviceName), barberName: escapeHtml(appointment.barberName),
+    businessName: escapeHtml(business.businessName), address: escapeHtml(business.address), city: escapeHtml(business.city),
+    phone: escapeHtml(business.phone), when: escapeHtml(when)
+  };
   await transport.sendMail({
     from: config.from,
     to,
     subject: `Recordatorio de cita | ${business.businessName}`,
     text: `Hola ${firstName}, te recordamos tu cita de ${appointment.serviceName} con ${appointment.barberName} el ${when}. Dirección: ${business.address}, ${business.city}.`,
-    html: `<main style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px;color:#151515"><p style="font-size:12px;letter-spacing:1.5px;color:#3569ee;font-weight:700">${business.businessName}</p><h1 style="font-size:26px">Recordatorio de tu cita</h1><p>Hola ${firstName}, tienes una cita próxima.</p><p><b>${appointment.serviceName}</b><br/>Con ${appointment.barberName}<br/>${when}</p><p style="color:#5e626d">${business.address}, ${business.city} · ${business.phone}</p></main>`
+    html: `<main style="font-family:Arial,sans-serif;max-width:560px;margin:auto;padding:28px;color:#151515"><p style="font-size:12px;letter-spacing:1.5px;color:#3569ee;font-weight:700">${safe.businessName}</p><h1 style="font-size:26px">Recordatorio de tu cita</h1><p>Hola ${safe.firstName}, tienes una cita próxima.</p><p><b>${safe.serviceName}</b><br/>Con ${safe.barberName}<br/>${safe.when}</p><p style="color:#5e626d">${safe.address}, ${safe.city} · ${safe.phone}</p></main>`
   });
 }

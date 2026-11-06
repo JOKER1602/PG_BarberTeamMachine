@@ -18,7 +18,9 @@ CREATE TABLE users (
   last_name VARCHAR(80) NOT NULL,
   email VARCHAR(160) NOT NULL UNIQUE,
   phone VARCHAR(30),
+  whatsapp_opt_in_at DATETIME NULL,
   password_hash VARCHAR(255) NOT NULL,
+  must_change_password BOOLEAN NOT NULL DEFAULT FALSE,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
@@ -136,6 +138,16 @@ CREATE TABLE notifications (
   INDEX idx_notifications_user_status (user_id, read_at, created_at)
 );
 
+CREATE TABLE payment_proofs (
+  id CHAR(36) PRIMARY KEY,
+  client_id BIGINT UNSIGNED NOT NULL,
+  storage_key VARCHAR(255) NOT NULL UNIQUE,
+  used_at DATETIME NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  CONSTRAINT fk_payment_proofs_client FOREIGN KEY (client_id) REFERENCES users (id),
+  INDEX idx_payment_proofs_owner_status (client_id, used_at, created_at)
+);
+
 CREATE TABLE reviews (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   client_id BIGINT UNSIGNED NOT NULL,
@@ -172,7 +184,7 @@ CREATE TABLE business_settings (
 );
 
 INSERT INTO business_settings (id, business_name, address, city, country, phone, whatsapp, hours_text, maps_url, description)
-VALUES (1, 'Barber Team Machine', 'Buenos Aires 130', 'Cochabamba', 'Bolivia', '77469963', '77469963', 'Lunes a sábado · 10:00 AM — 7:00 PM', 'https://maps.app.goo.gl/At4qrWe6P2KrDCyW9', 'Precisión, técnica y estilo para cada visita.');
+VALUES (1, 'Empyrean Studio', 'Buenos Aires 130', 'Cochabamba', 'Bolivia', '77469963', '77469963', 'Lunes a sábado · 10:00 AM — 7:00 PM', 'https://maps.app.goo.gl/At4qrWe6P2KrDCyW9', 'Precisión, técnica y estilo para cada visita.');
 
 CREATE TABLE reminder_jobs (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,

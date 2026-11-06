@@ -1,46 +1,51 @@
-const API_URL = import.meta.env.VITE_API_URL ?? 'http://localhost:3002/api';
+// Mantiene frontend y API en el mismo host. Así la aplicación funciona igual
+// si se abre con localhost, 127.0.0.1 o la IP local de la computadora.
+const browserLocation = globalThis.window?.location ?? { protocol: 'http:', hostname: 'localhost' };
+const localApiUrl = `${browserLocation.protocol}//${browserLocation.hostname}:3002/api`;
+// En desarrollo la API vive en el puerto 3002. En producción se usa /api
+// para que un proxy HTTPS pueda servir frontend y backend en el mismo dominio.
+// Si la API se publica en otro dominio, VITE_API_URL tiene prioridad.
+const defaultApiUrl = import.meta.env.DEV ? localApiUrl : '/api';
+const API_URL = import.meta.env.VITE_API_URL ?? defaultApiUrl;
 
-function expireStoredSession(path, token) {
-  if (!token || path.startsWith('/auth/login') || path.startsWith('/auth/register')) return;
+function expireStoredSession(path) {
+  if (path.startsWith('/auth/login') || path.startsWith('/auth/register') || path.startsWith('/auth/me')) return;
   clearSession();
   window.location.replace('/?login=1&session=expired');
 }
 
 async function request(path, options = {}) {
-  const token = localStorage.getItem('btm_token');
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
+    credentials: 'include',
     headers: {
       'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...options.headers
     }
   });
   const data = response.status === 204 ? null : await response.json();
   if (!response.ok) {
-    if (response.status === 401) expireStoredSession(path, token);
+    if (response.status === 401) expireStoredSession(path);
     throw new Error(data?.message ?? 'No se pudo completar la solicitud');
   }
   return data;
 }
 
 async function upload(path, file, field = 'photo') {
-  const token = localStorage.getItem('btm_token');
   const body = new FormData();
   body.append(field, file);
-  const response = await fetch(`${API_URL}${path}`, { method: 'POST', headers: token ? { Authorization: `Bearer ${token}` } : {}, body });
+  const response = await fetch(`${API_URL}${path}`, { method: 'POST', credentials: 'include', body });
   const data = await response.json();
   if (!response.ok) {
-    if (response.status === 401) expireStoredSession(path, token);
+    if (response.status === 401) expireStoredSession(path);
     throw new Error(data?.message ?? 'No se pudo subir la imagen');
   }
   return data;
 }
 
 export const api = {
-  health: () => request('/health'),
   businessSettings: () => request('/settings'),
-  reviews: () => request('/reviews'),
+  reviews: (barberId) => request(`/reviews${barberId ? `?barberId=${encodeURIComponent(barberId)}` : ''}`),
   createReview: (body) => request('/reviews', { method: 'POST', body: JSON.stringify(body) }),
   updateBusinessSettings: (body) => request('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
   uploadPaymentQr: (file) => upload('/settings/payment-qr', file, 'qr'),
@@ -53,16 +58,22 @@ export const api = {
   completeBarberAppointment: (id) => request(`/barber/appointments/${id}/complete`, { method: 'PATCH' }),
   updateBarberAppointmentStatus: (id, body) => request(`/barber/appointments/${id}/status`, { method: 'PATCH', body: JSON.stringify(body) }),
   availability: (barberId, serviceIds, date) => request(`/appointments/availability?barberId=${barberId}&serviceIds=${Array.isArray(serviceIds) ? serviceIds.join(',') : serviceIds}&date=${date}`),
+  recommendations: (serviceIds = [], days = 14) => {
+    const query = new URLSearchParams({ days: String(days) });
+    if (serviceIds.length) query.set('serviceIds', serviceIds.join(','));
+    return request(`/recommendations?${query.toString()}`);
+  },
+  assistantQuery: (query) => request('/assistant/query', { method: 'POST', body: JSON.stringify({ query }) }),
   register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
   login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
+  me: () => request('/auth/me'),
+  logout: () => request('/auth/logout', { method: 'POST' }),
   requestPasswordReset: (email) => request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
   resetPassword: (body) => request('/auth/reset-password', { method: 'POST', body: JSON.stringify(body) }),
   appointments: () => request('/appointments/mine'),
   createAppointments: (body) => request('/appointments/multi', { method: 'POST', body: JSON.stringify(body) }),
   rescheduleAppointment: (id, startsAt) => request(`/appointments/${id}/reschedule`, { method: 'PATCH', body: JSON.stringify({ startsAt }) }),
   cancelAppointment: (id) => request(`/appointments/${id}/cancel`, { method: 'PATCH' }),
-  notifications: () => request('/notifications'),
-  markNotificationRead: (id) => request(`/notifications/${id}/read`, { method: 'PATCH' }),
   updateProfile: (body) => request('/auth/me', { method: 'PATCH', body: JSON.stringify(body) }),
   updatePassword: (body) => request('/auth/me/password', { method: 'PATCH', body: JSON.stringify(body) }),
   adminAppointments: (query = '') => request(`/appointments/admin${query ? `?${query}` : ''}`),
@@ -71,6 +82,7 @@ export const api = {
   adminServices: () => request('/services/admin'),
   createService: (body) => request('/services', { method: 'POST', body: JSON.stringify(body) }),
   updateService: (id, body) => request(`/services/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  deleteService: (id) => request(`/services/${id}`, { method: 'DELETE' }),
   adminBarbers: () => request('/barbers/admin'),
   createBarber: (body) => request('/barbers', { method: 'POST', body: JSON.stringify(body) }),
   uploadBarberPhoto: (id, file) => upload(`/barbers/${id}/photo`, file),
@@ -89,11 +101,40 @@ export const api = {
 };
 
 export function saveSession(session) {
-  localStorage.setItem('btm_token', session.token);
-  localStorage.setItem('btm_user', JSON.stringify(session.user));
+  // El acceso se mantiene exclusivamente en la cookie HttpOnly. Este dato es
+  // solo una caché visual de la identidad y nunca autoriza peticiones.
+  localStorage.removeItem('btm_token');
+  localStorage.removeItem('btm_user');
+  if (typeof sessionStorage !== 'undefined') sessionStorage.setItem('btm_user', JSON.stringify(session.user));
+}
+
+export function getStoredSession() {
+  try {
+    const user = typeof sessionStorage === 'undefined' ? null : JSON.parse(sessionStorage.getItem('btm_user') ?? 'null');
+    return user ? { user } : null;
+  } catch {
+    clearSession();
+    return null;
+  }
 }
 
 export function clearSession() {
   localStorage.removeItem('btm_token');
   localStorage.removeItem('btm_user');
+  if (typeof sessionStorage !== 'undefined') {
+    sessionStorage.removeItem('btm_token');
+    sessionStorage.removeItem('btm_user');
+  }
+  // Elimina rastros de la implementación anterior. La cookie HttpOnly actual
+  // solamente puede eliminarse mediante POST /auth/logout en el servidor.
+  if (typeof document !== 'undefined') {
+    for (const name of ['btm_token', 'btm_user']) document.cookie = `${name}=; Max-Age=0; Path=/; SameSite=Lax`;
+  }
+}
+
+export function logoutToHome() {
+  api.logout().catch(() => undefined).finally(() => {
+    clearSession();
+    window.location.replace('/');
+  });
 }
