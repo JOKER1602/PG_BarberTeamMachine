@@ -92,6 +92,12 @@ export const TENANT_MODULE_PATHS = Object.freeze(Object.keys(tenantModules));
 const tenantApi = express.Router();
 for (const [prefix, router] of Object.entries(tenantModules)) tenantApi.use(prefix, router);
 
+// Datos públicos mínimos de la barbería: el frontend los usa para saber si un
+// slug existe (404) o está suspendido (403) antes de mostrar la página.
+app.get('/api/t/:tenantSlug', resolveTenant, (request, response) => {
+  const { slug, displayName } = request.tenant;
+  response.json({ tenant: { slug, displayName } });
+});
 app.use('/api/t/:tenantSlug', resolveTenant, tenantApi);
 app.use('/api/auth', authRouter);
 app.use(TENANT_MODULE_PATHS.map((prefix) => `/api${prefix}`), resolveDefaultTenant);

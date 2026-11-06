@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, clearSession, getStoredSession, saveSession } from '../api.js';
+import { tenantHref } from '../tenant.js';
 
 const weekdays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -195,7 +196,7 @@ export default function ReservationWizard() {
       saveSession(result);
       setSession(result.user);
       if (directAccountAccess) {
-        window.location.assign('/mi-cuenta?tab=historial');
+        window.location.assign(tenantHref('/mi-cuenta?tab=historial'));
         return;
       }
       setShowAuthModal(false);
@@ -274,7 +275,7 @@ export default function ReservationWizard() {
       setSubmittingPayment(true);
       const { proofId } = await api.uploadPaymentProof(paymentProofFile);
       await api.createAppointments({ barberId: selection.barberId, serviceIds: selectedServiceIds, startsAt: selectedSlot.startsAt, paymentProofId: proofId });
-      window.location.assign('/mi-cuenta?tab=historial');
+      window.location.assign(tenantHref('/mi-cuenta?tab=historial'));
     } catch (reservationError) {
       if (/token|sesión|autoriz/i.test(reservationError.message)) {
         clearSession();
@@ -295,7 +296,7 @@ export default function ReservationWizard() {
     }
     try {
       await api.rescheduleAppointment(rescheduleId, selectedSlot.startsAt);
-      window.location.assign('/mi-cuenta?tab=historial');
+      window.location.assign(tenantHref('/mi-cuenta?tab=historial'));
     } catch (rescheduleError) {
       setError(rescheduleError.message);
     }
@@ -315,8 +316,8 @@ export default function ReservationWizard() {
 
   return <main className="reservation-wizard">
     {step !== 4 && <header className="wizard-header">
-      <a href="/reservar" aria-label="Volver a servicios" title="Volver a servicios"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></a>
-      <a className="wizard-logo" href="/">EMPYREAN<span> STUDIO</span></a>
+      <a href={tenantHref('/reservar')} aria-label="Volver a servicios" title="Volver a servicios"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></a>
+      <a className="wizard-logo" href={tenantHref('/')}>EMPYREAN<span> STUDIO</span></a>
       <nav className="wizard-steps" aria-label="Progreso de la reserva">
         <span className={step >= 1 ? 'active' : ''}><b>1</b><em>Servicios</em></span><i aria-hidden="true"/>
         <span className={step >= 2 ? 'active' : ''}><b>2</b><em>Detalles</em></span><i aria-hidden="true"/>
@@ -427,7 +428,7 @@ export default function ReservationWizard() {
       </aside>
     </section>}
 
-    {step === 4 && <section className="appointment-confirmed"><div><span>✓</span><h1>Cita confirmada</h1><p>Te esperamos en Empyrean Studio.</p><a href="/reservar">Volver a la barbería</a></div></section>}
+    {step === 4 && <section className="appointment-confirmed"><div><span>✓</span><h1>Cita confirmada</h1><p>Te esperamos en Empyrean Studio.</p><a href={tenantHref('/reservar')}>Volver a la barbería</a></div></section>}
 
     {showProfessionalModal && <div className="professional-modal-backdrop" role="dialog" aria-modal="true" aria-label="Elegir profesional">
       <section className="professional-modal">

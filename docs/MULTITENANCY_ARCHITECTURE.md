@@ -82,7 +82,9 @@ Los 11 módulos de negocio filtran por tenant y se publican en `/api/t/:tenantSl
 - disponibilidad y prevención de cruces dentro de la barbería correcta;
 - cobros, QR, comprobantes y recordatorios por tenant.
 
-### Incremento 3 — Interfaz SaaS
+### Incremento 3 — Interfaz SaaS (URLs con slug ✅; resto pendiente)
+
+Hecho: el frontend usa `/t/:slug/...`, las rutas antiguas redirigen a `empyrean-studio`, el panel se decide por la membresía en cada barbería y un slug inexistente o suspendido muestra su propia página. Pendiente: marca por barbería, panel de plataforma y alta de barberías.
 
 - URLs con slug;
 - panel de propietario de barbería;

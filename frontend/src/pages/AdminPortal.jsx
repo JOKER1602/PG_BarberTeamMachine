@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, getStoredSession, logoutToHome, saveSession } from '../api.js';
+import { tenantHref } from '../tenant.js';
 
 const weekdays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
@@ -256,8 +257,8 @@ export default function AdminPortal() {
   }, [isAdmin]);
 
   useEffect(() => {
-    if (session?.role === 'BARBERO') window.location.replace('/barbero');
-    else if (!isAdmin) window.location.replace('/?login=1');
+    if (session?.role === 'BARBERO') window.location.replace(tenantHref('/barbero'));
+    else if (!isAdmin) window.location.replace(tenantHref('/?login=1'));
   }, [session, isAdmin]);
 
   async function login(event) {
@@ -271,24 +272,24 @@ export default function AdminPortal() {
       }
       saveSession(result);
       setSession(result.user);
-      if (result.user.role === 'BARBERO') window.location.assign('/barbero');
+      if (result.user.role === 'BARBERO') window.location.assign(tenantHref('/barbero'));
     } catch (loginError) {
       setError(loginError.message);
     }
   }
 
   if (!isAdmin && session?.role !== 'BARBERO') return <main className="admin-login-page">
-    <a className="admin-login-brand" href="/">EMPYREAN<span> STUDIO</span></a>
+    <a className="admin-login-brand" href={tenantHref('/')}>EMPYREAN<span> STUDIO</span></a>
     <section>
       <p className="section-label">Acceso único</p>
       <h1>Inicia sesión desde el encabezado</h1>
       <p>El acceso se realiza desde el botón «Iniciar sesión» de la página principal. Según tus credenciales, se abrirá automáticamente el panel correcto.</p>
-      <a className="admin-back-home" href="/?login=1">Ir al inicio de sesión →</a>
+      <a className="admin-back-home" href={tenantHref('/?login=1')}>Ir al inicio de sesión →</a>
     </section>
   </main>;
 
   return <main className="admin-portal">
-    <header><a href="/">EMPYREAN<span> STUDIO</span></a><div><span>Administrador: {session.firstName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
+    <header><a href={tenantHref('/')}>EMPYREAN<span> STUDIO</span></a><div><span>Administrador: {session.firstName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
     <div className="admin-portal-heading"><p className="section-label">Panel de administración</p><h1>Gestión de Empyrean Studio</h1><p>Administra la agenda, los servicios, el equipo y los usuarios desde un solo lugar.</p></div>
     <AdminPanel services={services} barbers={barbers} categories={categories} reloadCatalog={reloadCatalog}/>
   </main>;

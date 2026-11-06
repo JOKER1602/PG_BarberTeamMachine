@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, clearSession, getStoredSession, saveSession } from './api.js';
+import { legacyRedirectTarget, parseTenantPath, tenantHref } from './tenant.js';
 import HomePage from './pages/HomePage.jsx';
 import PasswordRecoveryPage from './pages/PasswordRecoveryPage.jsx';
 import BookingPage from './pages/BookingPage.jsx';
@@ -8,14 +9,25 @@ import ClientArea from './pages/ClientArea.jsx';
 import AdminPortal from './pages/AdminPortal.jsx';
 import BarberPortal from './pages/BarberPortal.jsx';
 
-function App() {
-  const path = window.location.pathname;
-  const protectedRoutes = { '/mi-cuenta': 'CLIENTE', '/admin': 'ADMINISTRADOR', '/barbero': 'BARBERO' };
-  const requiredRole = protectedRoutes[path];
-  const [hasAccess, setHasAccess] = useState(() => !requiredRole ? true : null);
+// Rutas de cada barbería, relativas a /t/:slug. Las protegidas exigen el rol
+// efectivo de la persona EN ESA barbería (ver tenant.js#accessRoleFor).
+const protectedRoutes = { '/mi-cuenta': 'CLIENTE', '/admin': 'ADMINISTRADOR', '/barbero': 'BARBERO' };
+
+function TenantUnavailable({ status }) {
+  const suspended = status === 403;
+  return <main className="admin-login-page">
+    <section>
+      <p className="section-label">{suspended ? 'Barbería no disponible' : 'Barbería no encontrada'}</p>
+      <h1>{suspended ? 'Esta barbería no está disponible temporalmente' : 'No encontramos esta barbería'}</h1>
+      <p>{suspended ? 'Vuelve a intentarlo más tarde o comunícate directamente con la barbería.' : 'Revisa la dirección que abriste. Puede que el enlace esté incompleto o que la barbería haya cambiado de dirección.'}</p>
+    </section>
+  </main>;
+}
+
+function ProtectedRoute({ requiredRole, children }) {
+  const [hasAccess, setHasAccess] = useState(null);
 
   useEffect(() => {
-    if (!requiredRole) return undefined;
     let active = true;
     const validateAccess = async () => {
       setHasAccess(null);
@@ -25,12 +37,12 @@ function App() {
         saveSession(result);
         const allowed = result.user.role === requiredRole;
         setHasAccess(allowed);
-        if (!allowed) window.location.replace('/?login=1');
+        if (!allowed) window.location.replace(tenantHref('/?login=1'));
       } catch {
         if (!active) return;
         clearSession();
         setHasAccess(false);
-        window.location.replace('/?login=1');
+        window.location.replace(tenantHref('/?login=1'));
       }
     };
     validateAccess();
@@ -43,14 +55,11 @@ function App() {
     };
   }, [requiredRole]);
 
-  if (requiredRole && hasAccess !== true) return <main className="app-shell" aria-busy="true" />;
-  if (path === '/recuperar-contrasena') return <PasswordRecoveryPage />;
-  if (path === '/reservar/cita') return <ReservationWizard />;
-  if (path === '/reservar') return <BookingPage />;
-  if (path === '/mi-cuenta') return <ClientArea />;
-  if (path === '/admin') return <AdminPortal />;
-  if (path === '/barbero') return <BarberPortal />;
+  if (hasAccess !== true) return <main className="app-shell" aria-busy="true" />;
+  return children;
+}
 
+function HomeRoute() {
   const [services, setServices] = useState([]);
   const [barbers, setBarbers] = useState([]);
   const [settings, setSettings] = useState(null);
@@ -81,13 +90,60 @@ function App() {
     return () => { active = false; };
   }, []);
 
-  const goToBooking = () => window.location.assign('/reservar');
+  const goToBooking = () => window.location.assign(tenantHref('/reservar'));
   const initialLogin = new URLSearchParams(window.location.search).get('login') === '1';
 
   return <main className="app-shell">
     {error && <p className="notification home-load-error">{error}</p>}
     <HomePage services={services} barbersCount={barbers.length} settings={settings} onReserve={goToBooking} session={session} initialLogin={initialLogin}/>
   </main>;
+}
+
+function TenantRoutes({ path }) {
+  const [tenantStatus, setTenantStatus] = useState('loading');
+
+  // Antes de mostrar la barbería se confirma que el slug existe y está activo.
+  useEffect(() => {
+    let active = true;
+    fetchTenantStatus().then((status) => { if (active) setTenantStatus(status); });
+    return () => { active = false; };
+  }, []);
+
+  if (tenantStatus === 'loading') return <main className="app-shell" aria-busy="true" />;
+  if (tenantStatus !== 200) return <TenantUnavailable status={tenantStatus}/>;
+
+  const requiredRole = protectedRoutes[path];
+  const page = {
+    '/reservar/cita': <ReservationWizard />,
+    '/reservar': <BookingPage />,
+    '/mi-cuenta': <ClientArea />,
+    '/admin': <AdminPortal />,
+    '/barbero': <BarberPortal />
+  }[path] ?? <HomeRoute />;
+  return requiredRole ? <ProtectedRoute requiredRole={requiredRole}>{page}</ProtectedRoute> : page;
+}
+
+async function fetchTenantStatus() {
+  try {
+    await api.tenant();
+    return 200;
+  } catch (error) {
+    return /no está disponible/i.test(error.message) ? 403 : 404;
+  }
+}
+
+function App() {
+  const { pathname, search, hash } = window.location;
+  if (pathname === '/recuperar-contrasena') return <PasswordRecoveryPage />;
+
+  const tenantPath = parseTenantPath(pathname);
+  if (!tenantPath) {
+    // Rutas antiguas sin slug (/reservar, /admin, ...) → barbería por defecto.
+    const target = legacyRedirectTarget({ pathname, search, hash });
+    if (target) window.location.replace(target);
+    return <main className="app-shell" aria-busy="true" />;
+  }
+  return <TenantRoutes path={tenantPath.path} />;
 }
 
 export default App;

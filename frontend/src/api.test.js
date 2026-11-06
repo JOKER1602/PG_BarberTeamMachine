@@ -42,7 +42,8 @@ describe('cliente API del frontend', () => {
     saveSession({ user: { id: 12, role: 'CLIENTE', firstName: 'Ana' } });
 
     expect(storage.snapshot()).toEqual({});
-    expect(getStoredSession()).toEqual({ user: { id: 12, role: 'CLIENTE', firstName: 'Ana' } });
+    // El rol se recalcula para la barbería actual y se conserva el de la cuenta.
+    expect(getStoredSession()).toEqual({ user: { id: 12, role: 'CLIENTE', globalRole: 'CLIENTE', firstName: 'Ana' } });
 
     clearSession();
     expect(storage.snapshot()).toEqual({});
@@ -70,7 +71,7 @@ describe('cliente API del frontend', () => {
     await api.availability(7, [2, 5], '2026-10-15');
 
     expect(fetch).toHaveBeenCalledWith(
-      'http://localhost:3002/api/appointments/availability?barberId=7&serviceIds=2,5&date=2026-10-15',
+      'http://localhost:3002/api/t/empyrean-studio/appointments/availability?barberId=7&serviceIds=2,5&date=2026-10-15',
       expect.objectContaining({ headers: { 'Content-Type': 'application/json' }, credentials: 'include' })
     );
   });
@@ -89,7 +90,7 @@ describe('cliente API del frontend', () => {
     await expect(api.appointments()).rejects.toThrow('Sesión expirada');
 
     expect(storage.snapshot()).toEqual({});
-    expect(replace).toHaveBeenCalledWith('/?login=1&session=expired');
+    expect(replace).toHaveBeenCalledWith('/t/empyrean-studio?login=1&session=expired');
   });
 
   it('no redirige por una credencial inválida durante el inicio de sesión', async () => {

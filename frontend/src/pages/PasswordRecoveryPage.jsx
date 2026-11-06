@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, clearSession } from '../api.js';
+import { tenantHref } from '../tenant.js';
 
 function useAutoDismiss(message, dismiss, delay = 4500) {
   useEffect(() => {
@@ -37,11 +38,11 @@ export default function PasswordRecoveryPage() {
   }
 
   return <main className="password-recovery-page"><section className="password-recovery-card">
-    <a className="recovery-logo" href="/">EMPYREAN<span> STUDIO</span></a>
+    <a className="recovery-logo" href={tenantHref('/')}>EMPYREAN<span> STUDIO</span></a>
     <p className="section-label">Acceso seguro</p>
     <h1>{token ? 'Crea una nueva contraseña' : 'Recupera tu contraseña'}</h1>
     <p>{token ? 'Elige una contraseña nueva para volver a ingresar a tu cuenta.' : 'Escribe tu correo y te enviaremos un enlace válido por 30 minutos.'}</p>
-    {message ? <><div className="recovery-message success">{message}</div>{token && <a className="wizard-primary recovery-login-cta" href="/?login=1">Iniciar sesión</a>}</> : <form onSubmit={submit}>
+    {message ? <><div className="recovery-message success">{message}</div>{token && <a className="wizard-primary recovery-login-cta" href={tenantHref('/?login=1')}>Iniciar sesión</a>}</> : <form onSubmit={submit}>
       {token ? <><label>Nueva contraseña<input type="password" minLength="8" required autoComplete="new-password" value={password} onChange={(event) => setPassword(event.target.value)}/></label><label>Confirmar contraseña<input type="password" minLength="8" required autoComplete="new-password" value={confirmation} onChange={(event) => setConfirmation(event.target.value)}/></label></> : <label>Correo electrónico<input type="email" required autoComplete="email" value={email} onChange={(event) => setEmail(event.target.value)}/></label>}
       {error && <div className="recovery-message error">{error}</div>}
       <button className="wizard-primary" disabled={loading}>{loading ? 'Procesando...' : token ? 'Actualizar contraseña' : 'Enviar enlace'}</button>

@@ -82,19 +82,24 @@ La última ejecución conocida pasó: 23 pruebas backend aprobadas, 1 smoke test
 
 ## 5. Interfaz y rutas web actuales
 
-No se usa React Router. `frontend/src/App.jsx` decide qué página mostrar mediante `window.location.pathname`.
+No se usa React Router. `frontend/src/App.jsx` decide qué página mostrar mediante `window.location.pathname`. Cada barbería vive bajo `/t/:slug` (rama `saas/incremento-2`).
 
 | Ruta | Página | Finalidad |
 |---|---|---|
-| `/` | `HomePage.jsx` | Inicio público, servicios, información, login/registro modal |
-| `/reservar` | `BookingPage.jsx` | Catálogo público, equipo, asistente y acceso a reserva |
-| `/reservar/cita` | `ReservationWizard.jsx` | Flujo de reserva: servicio, profesional, fecha/hora, QR y confirmación |
-| `/mi-cuenta?tab=historial` | `ClientArea.jsx` | Perfil, próximas citas, historial, reseñas y cambios permitidos |
-| `/admin` | `AdminPortal.jsx` | Administración de la barbería actual |
-| `/barbero` | `BarberPortal.jsx` | Agenda y acciones del barbero autenticado |
-| `/recuperar-contrasena` | `PasswordRecoveryPage.jsx` | Solicitud y restablecimiento de contraseña |
+| `/t/:slug` | `HomePage.jsx` | Inicio público, servicios, información, login/registro modal |
+| `/t/:slug/reservar` | `BookingPage.jsx` | Catálogo público, equipo, asistente y acceso a reserva |
+| `/t/:slug/reservar/cita` | `ReservationWizard.jsx` | Flujo de reserva: servicio, profesional, fecha/hora, QR y confirmación |
+| `/t/:slug/mi-cuenta?tab=historial` | `ClientArea.jsx` | Perfil, próximas citas, historial, reseñas y cambios permitidos |
+| `/t/:slug/admin` | `AdminPortal.jsx` | Administración de esa barbería (OWNER/ADMIN) |
+| `/t/:slug/barbero` | `BarberPortal.jsx` | Agenda y acciones del barbero (BARBER de esa barbería) |
+| `/recuperar-contrasena` | `PasswordRecoveryPage.jsx` | Global: solicitud y restablecimiento de contraseña |
 
-Las rutas protegidas en `App.jsx` son `/mi-cuenta`, `/admin` y `/barbero`. La interfaz consulta `/api/auth/me` al cargar para validar que la cookie de sesión siga vigente. Al cerrar sesión se llama a `POST /api/auth/logout` y se vuelve a `/`.
+- Las rutas antiguas sin slug (`/`, `/reservar`, `/admin`, ...) redirigen a la misma ruta de `VITE_DEFAULT_TENANT_SLUG` (por defecto `empyrean-studio`), conservando consulta y ancla.
+- Antes de mostrar una barbería se consulta `GET /api/t/:slug`: si no existe se muestra «No encontramos esta barbería»; si está suspendida, «no disponible temporalmente».
+- `frontend/src/tenant.js` concentra el contexto: `tenantHref()` para todo enlace interno, `currentTenantSlug()`, y `accessRoleFor()`/`withTenantRole()`, que calculan el **rol efectivo en la barbería de la URL** a partir de las membresías que devuelve `/api/auth/me` (`OWNER`/`ADMIN` → `ADMINISTRADOR`, `BARBER` → `BARBERO`, si no → `CLIENTE` solo para cuentas de cliente). Las páginas siguen comparando esos tres nombres; `user.globalRole` guarda el rol de la cuenta.
+- `frontend/src/api.js` antepone `/t/:slug` a las llamadas de negocio; `/api/auth` es global.
+- Las rutas protegidas (`/mi-cuenta`, `/admin`, `/barbero`) validan la sesión con `/api/auth/me` y el rol efectivo en esa barbería. Al cerrar sesión se llama a `POST /api/auth/logout` y se vuelve al inicio de la misma barbería.
+- **Despliegue:** el servidor del frontend debe devolver `index.html` para `/t/*` (SPA fallback); Vite lo hace en desarrollo.
 
 ## 6. Roles actuales (single tenant)
 
@@ -424,7 +429,8 @@ La migración se dividió en dos (ver `database/README.md`):
 
 **Pendiente:**
 - Paso 2: API de plataforma para crear/suspender barberías (hoy se crean por SQL).
-- Paso 5: frontend con rutas `/t/:slug`; mientras tanto usa `/api/...` (barbería por defecto). El login todavía redirige por rol global (`users.role_id`), no por membresía.
+- ~~Paso 5~~ ✅ hecho: frontend con rutas `/t/:slug` y acceso por membresía (ver sección 5). Verificado en el navegador con una segunda barbería: la dueña (cuenta de cliente) entra al panel de su barbería, es cliente en Empyrean y no ve su panel; cerrar sesión y «Atrás» no devuelven el acceso.
+- Marca por barbería: los textos «EMPYREAN STUDIO» del encabezado, títulos y correos siguen fijos; deben salir de `tenant_settings.business_name`.
 - `POST /appointments/multi` y `POST /payments/proof` aún exigen el rol global `CLIENTE`: personal de una barbería no puede reservar como cliente en otra.
 - Fotos de barberos y QR siguen en carpetas públicas sin prefijo por tenant.
 
@@ -446,7 +452,7 @@ La migración se dividió en dos (ver `database/README.md`):
 2. API de plataforma para crear/activar/suspender tenants.
 3. ✅ Aislar servicios, barberos, horarios y bloqueos por `tenant_id` (más configuración y cuentas de barbero).
 4. ✅ Aislar citas, cobros, comprobantes, reseñas, notificaciones, recordatorios y analítica (más portal del barbero, asistente y recomendaciones).
-5. Actualizar frontend a rutas `/t/:slug/...`.
+5. ✅ Actualizar frontend a rutas `/t/:slug/...` (acceso por membresía; rutas antiguas redirigen a la barbería por defecto).
 6. ✅ Añadir pruebas negativas de cruce Tenant A → Tenant B (guardia de 45 rutas + pruebas reales 20/20 y 31/31).
 7. Aplicar `014` con backup y ventana de mantenimiento (`013` puede aplicarse antes).
 8. Agregar planes, límites, suscripciones, prueba gratuita y facturación.

@@ -1,3 +1,5 @@
+import { currentTenantSlug, tenantHref, withTenantRole } from './tenant.js';
+
 // Mantiene frontend y API en el mismo host. Así la aplicación funciona igual
 // si se abre con localhost, 127.0.0.1 o la IP local de la computadora.
 const browserLocation = globalThis.window?.location ?? { protocol: 'http:', hostname: 'localhost' };
@@ -8,14 +10,27 @@ const localApiUrl = `${browserLocation.protocol}//${browserLocation.hostname}:30
 const defaultApiUrl = import.meta.env.DEV ? localApiUrl : '/api';
 const API_URL = import.meta.env.VITE_API_URL ?? defaultApiUrl;
 
+// Módulos de negocio: se piden a la barbería de la URL (/api/t/:slug/...).
+// Autenticación y salud son globales.
+const TENANT_MODULE = /^\/(services|barbers|settings|admin|barber|appointments|payments|reviews|notifications|recommendations|assistant)(?=\/|\?|$)/;
+
+export function apiUrl(path) {
+  return TENANT_MODULE.test(path) ? `${API_URL}/t/${currentTenantSlug()}${path}` : `${API_URL}${path}`;
+}
+
+// El rol que usan las páginas es el de la persona en la barbería actual.
+function withSessionRole(result) {
+  return result?.user ? { ...result, user: withTenantRole(result.user) } : result;
+}
+
 function expireStoredSession(path) {
   if (path.startsWith('/auth/login') || path.startsWith('/auth/register') || path.startsWith('/auth/me')) return;
   clearSession();
-  window.location.replace('/?login=1&session=expired');
+  window.location.replace(tenantHref('/?login=1&session=expired'));
 }
 
 async function request(path, options = {}) {
-  const response = await fetch(`${API_URL}${path}`, {
+  const response = await fetch(apiUrl(path), {
     ...options,
     credentials: 'include',
     headers: {
@@ -34,7 +49,7 @@ async function request(path, options = {}) {
 async function upload(path, file, field = 'photo') {
   const body = new FormData();
   body.append(field, file);
-  const response = await fetch(`${API_URL}${path}`, { method: 'POST', credentials: 'include', body });
+  const response = await fetch(apiUrl(path), { method: 'POST', credentials: 'include', body });
   const data = await response.json();
   if (!response.ok) {
     if (response.status === 401) expireStoredSession(path);
@@ -44,6 +59,7 @@ async function upload(path, file, field = 'photo') {
 }
 
 export const api = {
+  tenant: () => request(`/t/${currentTenantSlug()}`),
   businessSettings: () => request('/settings'),
   reviews: (barberId) => request(`/reviews${barberId ? `?barberId=${encodeURIComponent(barberId)}` : ''}`),
   createReview: (body) => request('/reviews', { method: 'POST', body: JSON.stringify(body) }),
@@ -64,9 +80,9 @@ export const api = {
     return request(`/recommendations?${query.toString()}`);
   },
   assistantQuery: (query) => request('/assistant/query', { method: 'POST', body: JSON.stringify({ query }) }),
-  register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
-  login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
-  me: () => request('/auth/me'),
+  register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }).then(withSessionRole),
+  login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }).then(withSessionRole),
+  me: () => request('/auth/me').then(withSessionRole),
   logout: () => request('/auth/logout', { method: 'POST' }),
   requestPasswordReset: (email) => request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
   resetPassword: (body) => request('/auth/reset-password', { method: 'POST', body: JSON.stringify(body) }),
@@ -74,7 +90,7 @@ export const api = {
   createAppointments: (body) => request('/appointments/multi', { method: 'POST', body: JSON.stringify(body) }),
   rescheduleAppointment: (id, startsAt) => request(`/appointments/${id}/reschedule`, { method: 'PATCH', body: JSON.stringify({ startsAt }) }),
   cancelAppointment: (id) => request(`/appointments/${id}/cancel`, { method: 'PATCH' }),
-  updateProfile: (body) => request('/auth/me', { method: 'PATCH', body: JSON.stringify(body) }),
+  updateProfile: (body) => request('/auth/me', { method: 'PATCH', body: JSON.stringify(body) }).then(withSessionRole),
   updatePassword: (body) => request('/auth/me/password', { method: 'PATCH', body: JSON.stringify(body) }),
   adminAppointments: (query = '') => request(`/appointments/admin${query ? `?${query}` : ''}`),
   updateAppointmentAdminNotes: (id, adminNotes) => request(`/appointments/${id}/admin-notes`, { method: 'PATCH', body: JSON.stringify({ adminNotes }) }),
@@ -111,7 +127,9 @@ export function saveSession(session) {
 export function getStoredSession() {
   try {
     const user = typeof sessionStorage === 'undefined' ? null : JSON.parse(sessionStorage.getItem('btm_user') ?? 'null');
-    return user ? { user } : null;
+    // El rol se recalcula para la barbería de la URL actual: la misma persona
+    // puede ser dueña en una barbería y cliente en otra.
+    return user ? { user: withTenantRole(user) } : null;
   } catch {
     clearSession();
     return null;
@@ -135,6 +153,6 @@ export function clearSession() {
 export function logoutToHome() {
   api.logout().catch(() => undefined).finally(() => {
     clearSession();
-    window.location.replace('/');
+    window.location.replace(tenantHref('/'));
   });
 }

@@ -40,6 +40,20 @@ function publicUser(user) {
   };
 }
 
+// La sesión incluye las barberías donde la persona es personal, para que el
+// frontend elija el panel correcto en cada /t/:slug. Es solo informativo: la
+// API vuelve a verificar la membresía en cada petición.
+async function sessionUser(user) {
+  const [memberships] = await pool.execute(
+    `SELECT t.slug AS tenantSlug, t.display_name AS tenantName, m.role
+     FROM tenant_memberships m JOIN tenants t ON t.id = m.tenant_id
+     WHERE m.user_id = ? AND m.is_active = TRUE AND t.status IN ('TRIAL', 'ACTIVE')
+     ORDER BY t.display_name`,
+    [user.id]
+  );
+  return { ...publicUser(user), memberships };
+}
+
 router.post('/register', async (request, response, next) => {
   const parsed = registrationSchema.safeParse(request.body);
   if (!parsed.success) {
@@ -67,7 +81,7 @@ router.post('/register', async (request, response, next) => {
     const user = rows[0];
 
     setAuthCookie(response, user);
-    return response.status(201).json({ user: publicUser(user) });
+    return response.status(201).json({ user: await sessionUser(user) });
   } catch (error) {
     return next(error);
   }
@@ -94,7 +108,7 @@ router.post('/login', async (request, response, next) => {
     }
 
     setAuthCookie(response, user);
-    return response.json({ user: publicUser(user) });
+    return response.json({ user: await sessionUser(user) });
   } catch (error) {
     return next(error);
   }
@@ -117,7 +131,7 @@ router.get('/me', requireAuth, async (request, response, next) => {
       return response.status(401).json({ message: 'Usuario no disponible' });
     }
 
-    return response.json({ user: publicUser(user) });
+    return response.json({ user: await sessionUser(user) });
   } catch (error) {
     return next(error);
   }
@@ -163,7 +177,7 @@ router.patch('/me', requireAuth, async (request, response, next) => {
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`, [request.auth.sub]
     );
     await connection.commit();
-    return response.json({ user: publicUser(rows[0]) });
+    return response.json({ user: await sessionUser(rows[0]) });
   } catch (error) { if (connection) await connection.rollback(); return next(error); }
   finally { connection?.release(); }
 });
