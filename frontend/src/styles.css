@@ -965,3 +965,30 @@ html, body, #root { max-width: 100%; overflow-x: hidden; }
 .brand-image-preview { display: block; max-width: 100%; border-radius: 8px; margin-bottom: .5rem; background: #0d0e11; object-fit: cover; }
 .brand-image-preview.logo { width: 96px; height: 96px; }
 .brand-image-preview.cover { width: 100%; height: 90px; }
+
+/* Panel de plataforma (operadores del SaaS). */
+.platform-portal .admin-card { margin-bottom: 1.5rem; }
+.platform-table { display: grid; gap: .25rem; overflow-x: auto; }
+.platform-row { display: grid; grid-template-columns: 1.4fr 1.2fr 1.4fr .8fr .7fr 1.3fr; gap: .75rem; align-items: center; min-width: 760px; padding: .7rem .5rem; border-bottom: 1px solid var(--btm-line, #242321); font-size: .85rem; }
+.platform-head { color: var(--btm-copy, #aaa49c); font-size: .68rem; letter-spacing: .1em; text-transform: uppercase; }
+.platform-row b, .platform-row small { display: block; }
+.platform-row small { color: var(--btm-copy, #aaa49c); }
+.platform-row a { color: #8fb0ff; }
+.platform-status { display: inline-block; padding: .2rem .55rem; border-radius: 999px; font-style: normal; font-size: .72rem; background: #23262d; }
+.platform-status.active { background: #123d26; color: #7ee2a8; }
+.platform-status.trial { background: #1d2a4a; color: #9db8ff; }
+.platform-status.suspended { background: #4a3412; color: #f2c14e; }
+.platform-status.cancelled { background: #3d1515; color: #ff9d9d; }
+.platform-actions { display: flex; flex-wrap: wrap; gap: .4rem; }
+.platform-actions button { padding: .35rem .7rem; font-size: .75rem; }
+.platform-actions button.danger { background: #5a1f1f; }
+.platform-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; }
+.platform-form > button, .platform-owner { grid-column: 1 / -1; }
+.platform-owner { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 1rem; border: 1px solid var(--btm-line, #242321); border-radius: 10px; padding: 1rem; }
+.platform-owner legend { padding: 0 .4rem; color: var(--btm-copy, #aaa49c); }
+.platform-owner > label:first-of-type, .platform-owner > p { grid-column: 1 / -1; }
+.platform-owner > p { margin: 0; color: var(--btm-copy, #aaa49c); font-size: .8rem; }
+.platform-slug { display: flex; align-items: center; gap: .3rem; }
+.platform-slug input { flex: 1; }
+.platform-login { margin-top: 1.5rem; display: grid; gap: 1rem; text-align: left; }
+@media (max-width: 760px) { .platform-form, .platform-owner { grid-template-columns: 1fr; } }

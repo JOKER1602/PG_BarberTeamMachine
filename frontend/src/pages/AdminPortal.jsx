@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react';
 import { api, getStoredSession, logoutToHome, saveSession } from '../api.js';
 import { brandInitials, brandWords, tenantBrand, tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
+import RequiredPasswordChange from '../components/RequiredPasswordChange.jsx';
 
 const weekdays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 
@@ -294,6 +295,7 @@ export default function AdminPortal() {
     }
   }
 
+  if (isAdmin && session?.mustChangePassword) return <RequiredPasswordChange session={session} onComplete={setSession} purpose="administrar tu barbería"/>;
   if (!isAdmin && session?.role !== 'BARBERO') return <main className="admin-login-page">
     <a className="admin-login-brand" href={tenantHref('/')}><BrandMark/></a>
     <section>

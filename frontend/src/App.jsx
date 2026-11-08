@@ -8,6 +8,7 @@ import ReservationWizard from './pages/ReservationWizard.jsx';
 import ClientArea from './pages/ClientArea.jsx';
 import AdminPortal from './pages/AdminPortal.jsx';
 import BarberPortal from './pages/BarberPortal.jsx';
+import PlatformPortal from './pages/PlatformPortal.jsx';
 
 // Rutas de cada barbería, relativas a /t/:slug. Las protegidas exigen el rol
 // efectivo de la persona EN ESA barbería (ver tenant.js#accessRoleFor).
@@ -146,6 +147,7 @@ function RecoveryRoute() {
 function App() {
   const { pathname, search, hash } = window.location;
   if (pathname === '/recuperar-contrasena') return <RecoveryRoute />;
+  if (pathname === '/platform') return <PlatformPortal />;
 
   const tenantPath = parseTenantPath(pathname);
   if (!tenantPath) {

@@ -14,6 +14,7 @@ import reviewsRouter from './routes/reviews.js';
 import paymentsRouter from './routes/payments.js';
 import recommendationsRouter from './routes/recommendations.js';
 import assistantRouter from './routes/assistant.js';
+import platformRouter from './routes/platform.js';
 import { resolveDefaultTenant, resolveTenant } from './middleware/tenant.js';
 import pool from './config/database.js';
 
@@ -114,6 +115,8 @@ app.get('/api/t/:tenantSlug', resolveTenant, async (request, response, next) => 
 });
 app.use('/api/t/:tenantSlug', resolveTenant, tenantApi);
 app.use('/api/auth', authRouter);
+// Operadores de la plataforma: alta y estado de barberías (global, sin slug).
+app.use('/api/platform', platformRouter);
 app.use(TENANT_MODULE_PATHS.map((prefix) => `/api${prefix}`), resolveDefaultTenant);
 app.use('/api', tenantApi);
 

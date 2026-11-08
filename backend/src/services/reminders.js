@@ -67,6 +67,7 @@ export async function processDueReminders() {
        LEFT JOIN tenant_settings bs ON bs.tenant_id = a.tenant_id
        JOIN tenants t ON t.id = a.tenant_id
        WHERE r.status = 'PENDING' AND r.scheduled_at <= UTC_TIMESTAMP() AND a.status = 'CONFIRMED'
+       AND t.status IN ('TRIAL', 'ACTIVE')
        AND (r.channel <> 'EMAIL' OR ? = 1) AND (r.channel <> 'WHATSAPP' OR ? = 1)
        AND (r.channel <> 'WHATSAPP' OR a.payment_reference IS NULL OR NOT EXISTS (
          SELECT 1 FROM appointments earlier WHERE earlier.payment_reference = a.payment_reference AND earlier.status = 'CONFIRMED'

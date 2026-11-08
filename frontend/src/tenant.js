@@ -12,7 +12,8 @@ const TENANT_PATH = /^\/t\/([a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?)(\/.*)?$/;
 
 // Rutas globales: no pertenecen a una barbería (el enlace del correo de
 // recuperación de contraseña apunta aquí).
-export const GLOBAL_PATHS = Object.freeze(['/recuperar-contrasena']);
+// /platform es el panel de los operadores del SaaS (no es de ninguna barbería).
+export const GLOBAL_PATHS = Object.freeze(['/recuperar-contrasena', '/platform']);
 
 export function parseTenantPath(pathname) {
   const match = TENANT_PATH.exec(pathname ?? '');

@@ -428,7 +428,13 @@ La migración se dividió en dos (ver `database/README.md`):
 - Prueba real sobre la base copia (ciclo completo en una barbería B con accesos desde A): 31/31 — disponibilidad, asistente, comprobante, reserva, aprobación, recordatorios, notificaciones, portal del barbero, atención, reseña, panel, usuarios y recomendaciones aislados. La prueba del paso 3 sigue 20/20.
 
 **Pendiente:**
-- Paso 2: API de plataforma para crear/suspender barberías (hoy se crean por SQL).
+- ✅ Paso 2 (7 de noviembre de 2026): API y panel de plataforma.
+  - `/api/platform/tenants` (GET listar, POST crear, PATCH `/:slug` estado/nombre), solo para `platform_administrators` (`requireAuth` + `requirePlatformAdmin`). El operador **no** ve datos de ninguna barbería: sin membresía recibe 403.
+  - Crear una barbería crea también su `tenant_settings` mínimo, 4 categorías por defecto y la membresía `OWNER`. Si el correo del dueño ya tiene cuenta se reutiliza; si no, se crea una cuenta de cliente con contraseña temporal obligatoria (el panel de administración ahora también exige cambiarla: `components/RequiredPasswordChange.jsx`).
+  - Estados: `TRIAL`/`ACTIVE` disponibles; `SUSPENDED` → la página responde 403, el personal pierde el panel, desaparece de las membresías de la sesión y no se envían recordatorios; `CANCELLED` → responde como inexistente. Los datos se conservan.
+  - Panel `/platform` en el frontend (ruta global): lista, alta con dueño y botones Activar/Suspender/Dar de baja con confirmación.
+  - Primer operador: `node scripts/platform-admin.mjs agregar correo@dominio` (también `quitar` y `listar`); la persona debe tener cuenta. Se ejecuta en el servidor.
+  - Verificado: pruebas `test/platform.test.js`, prueba real 24/24 (alta, primer acceso del dueño, suspensión, reactivación, baja, accesos ajenos) y el panel en el navegador.
 - ~~Paso 5~~ ✅ hecho: frontend con rutas `/t/:slug` y acceso por membresía (ver sección 5). Verificado en el navegador con una segunda barbería: la dueña (cuenta de cliente) entra al panel de su barbería, es cliente en Empyrean y no ve su panel; cerrar sesión y «Atrás» no devuelven el acceso.
 - ✅ Marca por barbería (7 de noviembre de 2026): ninguna página, correo ni WhatsApp muestra «Empyrean» fijo.
   - `GET /api/t/:slug` devuelve `brand` (nombre comercial, ciudad, `logoUrl`, `coverUrl`); `App.jsx` lo carga con `setTenantBrand` antes de mostrar la barbería y fija el título de la pestaña.
@@ -455,7 +461,7 @@ La migración se dividió en dos (ver `database/README.md`):
 ### Orden obligatorio de implementación SaaS
 
 1. ✅ Middleware `resolveTenant` y `requireTenantMembership`; sesiones sin rol global fijo.
-2. API de plataforma para crear/activar/suspender tenants.
+2. ✅ API de plataforma para crear/activar/suspender tenants (panel `/platform` y `scripts/platform-admin.mjs`).
 3. ✅ Aislar servicios, barberos, horarios y bloqueos por `tenant_id` (más configuración y cuentas de barbero).
 4. ✅ Aislar citas, cobros, comprobantes, reseñas, notificaciones, recordatorios y analítica (más portal del barbero, asistente y recomendaciones).
 5. ✅ Actualizar frontend a rutas `/t/:slug/...` (acceso por membresía; rutas antiguas redirigen a la barbería por defecto).

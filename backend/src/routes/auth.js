@@ -51,7 +51,8 @@ async function sessionUser(user) {
      ORDER BY t.display_name`,
     [user.id]
   );
-  return { ...publicUser(user), memberships };
+  const [platformRows] = await pool.execute('SELECT 1 FROM platform_administrators WHERE user_id = ?', [user.id]);
+  return { ...publicUser(user), memberships, isPlatformAdmin: platformRows.length > 0 };
 }
 
 router.post('/register', async (request, response, next) => {
