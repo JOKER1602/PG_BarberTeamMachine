@@ -22,7 +22,21 @@ export function parseTenantPath(pathname) {
 }
 
 export function currentTenantSlug() {
-  return parseTenantPath(globalThis.window?.location?.pathname)?.slug ?? DEFAULT_TENANT_SLUG;
+  const location = globalThis.window?.location;
+  const fromPath = parseTenantPath(location?.pathname)?.slug;
+  if (fromPath) return fromPath;
+  // En una ruta global (recuperar contraseña) la barbería de origen viaja como
+  // ?t=slug para conservar su marca y volver a ella.
+  if (GLOBAL_PATHS.includes(location?.pathname)) {
+    const fromQuery = new URLSearchParams(location?.search ?? '').get('t');
+    if (fromQuery && parseTenantPath(`/t/${fromQuery}`)) return fromQuery;
+  }
+  return DEFAULT_TENANT_SLUG;
+}
+
+// Enlace a la recuperación de contraseña que recuerda la barbería de origen.
+export function passwordRecoveryHref() {
+  return `/recuperar-contrasena?t=${currentTenantSlug()}`;
 }
 
 // Convierte una ruta interna ('/reservar', '/?login=1', '/#ubicacion') en la
@@ -40,6 +54,40 @@ export function tenantHref(target, slug = currentTenantSlug()) {
 export function legacyRedirectTarget({ pathname, search = '', hash = '' }) {
   if (parseTenantPath(pathname) || GLOBAL_PATHS.includes(pathname)) return null;
   return tenantHref(`${pathname}${search}${hash}`, DEFAULT_TENANT_SLUG);
+}
+
+// --- Marca de la barbería ---------------------------------------------------
+// Se carga una vez por página (App.jsx, con GET /api/t/:slug) antes de mostrar
+// la barbería, así todas las páginas leen nombre, ciudad, logo y portada sin
+// volver a pedirlos. Nunca se muestra la marca de otra barbería por defecto.
+let currentBrand = null;
+
+export function setTenantBrand({ tenant, brand } = {}) {
+  currentBrand = {
+    slug: tenant?.slug ?? currentTenantSlug(),
+    name: brand?.name || tenant?.displayName || 'Barbería',
+    city: brand?.city || '',
+    logoUrl: brand?.logoUrl || null,
+    coverUrl: brand?.coverUrl || null
+  };
+  if (globalThis.document) globalThis.document.title = currentBrand.name;
+  return currentBrand;
+}
+
+export function tenantBrand() {
+  return currentBrand ?? { slug: currentTenantSlug(), name: 'Barbería', city: '', logoUrl: null, coverUrl: null };
+}
+
+// "Empyrean Studio" → { first: 'EMPYREAN', rest: 'STUDIO' } para el logotipo de
+// dos tonos; un nombre de una sola palabra queda sin segunda parte.
+export function brandWords(name = tenantBrand().name) {
+  const [first = '', ...rest] = String(name).trim().toLocaleUpperCase('es').split(/\s+/);
+  return { first, rest: rest.join(' ') };
+}
+
+// Iniciales para los monogramas ("Empyrean Studio" → "ES").
+export function brandInitials(name = tenantBrand().name) {
+  return String(name).trim().split(/\s+/).slice(0, 2).map((word) => word[0] ?? '').join('').toLocaleUpperCase('es') || 'B';
 }
 
 const TENANT_ADMIN_ROLES = ['OWNER', 'ADMIN'];

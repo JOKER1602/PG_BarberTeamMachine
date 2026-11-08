@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, clearSession, getStoredSession, saveSession } from './api.js';
-import { legacyRedirectTarget, parseTenantPath, tenantHref } from './tenant.js';
+import { legacyRedirectTarget, parseTenantPath, setTenantBrand, tenantHref } from './tenant.js';
 import HomePage from './pages/HomePage.jsx';
 import PasswordRecoveryPage from './pages/PasswordRecoveryPage.jsx';
 import BookingPage from './pages/BookingPage.jsx';
@@ -125,16 +125,27 @@ function TenantRoutes({ path }) {
 
 async function fetchTenantStatus() {
   try {
-    await api.tenant();
+    setTenantBrand(await api.tenant());
     return 200;
   } catch (error) {
     return /no está disponible/i.test(error.message) ? 403 : 404;
   }
 }
 
+// Página global: usa la marca de la barbería de origen (?t=slug) si existe; si
+// no, se muestra con la marca genérica en lugar de la de otra barbería.
+function RecoveryRoute() {
+  const [ready, setReady] = useState(false);
+  useEffect(() => {
+    api.tenant().then(setTenantBrand).catch(() => setTenantBrand()).finally(() => setReady(true));
+  }, []);
+  if (!ready) return <main className="app-shell" aria-busy="true" />;
+  return <PasswordRecoveryPage />;
+}
+
 function App() {
   const { pathname, search, hash } = window.location;
-  if (pathname === '/recuperar-contrasena') return <PasswordRecoveryPage />;
+  if (pathname === '/recuperar-contrasena') return <RecoveryRoute />;
 
   const tenantPath = parseTenantPath(pathname);
   if (!tenantPath) {

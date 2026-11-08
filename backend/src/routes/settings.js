@@ -10,12 +10,16 @@ import { TENANT_ADMIN_ROLES, requireTenantMembership, tenantIdOf } from '../midd
 const router = Router();
 const requireTenantAdmin = [requireAuth, requireTenantMembership(...TENANT_ADMIN_ROLES)];
 const qrUpload = createImageUpload({ folder: 'qr', prefix: 'qr', label: 'código QR' });
+// Marca de la barbería: logo (cuadrado) y portada (imagen ancha). Son públicas.
+const brandUpload = createImageUpload({ folder: 'brand', prefix: 'brand', label: 'marca' });
+const brandColumns = { logo: 'logo_url', cover: 'cover_url' };
 const fields = {
   businessName: 'business_name', address: 'address', city: 'city', country: 'country', phone: 'phone', whatsapp: 'whatsapp',
   hoursText: 'hours_text', mapsUrl: 'maps_url', instagramUrl: 'instagram_url', facebookUrl: 'facebook_url', paymentQrUrl: 'payment_qr_url', description: 'description'
 };
 const selectSettings = `SELECT business_name AS businessName, address, city, country, phone, whatsapp,
-  hours_text AS hoursText, maps_url AS mapsUrl, instagram_url AS instagramUrl, facebook_url AS facebookUrl, payment_qr_url AS paymentQrUrl, description
+  hours_text AS hoursText, maps_url AS mapsUrl, instagram_url AS instagramUrl, facebook_url AS facebookUrl, payment_qr_url AS paymentQrUrl,
+  logo_url AS logoUrl, cover_url AS coverUrl, description
   FROM tenant_settings WHERE tenant_id = ?`;
 const settingsSchema = z.object({
   businessName: z.string().trim().min(2).max(160), address: z.string().trim().min(2).max(255), city: z.string().trim().min(2).max(120),
@@ -56,6 +60,20 @@ router.post('/payment-qr', ...requireTenantAdmin, qrUpload.single('qr'), async (
     if (!result.affectedRows) return response.status(409).json({ message: 'Guarda primero los datos del negocio antes de subir el QR.' });
     const [rows] = await pool.execute(selectSettings, [tenantId]);
     return response.status(201).json({ paymentQrUrl, settings: rows[0] });
+  } catch (error) { return next(error); }
+});
+
+router.post('/brand-image/:kind', ...requireTenantAdmin, brandUpload.single('image'), async (request, response, next) => {
+  const column = brandColumns[request.params.kind];
+  if (!column) return response.status(400).json({ message: 'Tipo de imagen inválido: usa logo o portada.' });
+  if (!request.file) return response.status(400).json({ message: 'Selecciona una imagen JPG, PNG o WEBP de hasta 5 MB.' });
+  try {
+    const tenantId = tenantIdOf(request);
+    const imageUrl = `${request.protocol}://${request.get('host')}/uploads/brand/${request.file.filename}`;
+    const [result] = await pool.execute(`UPDATE tenant_settings SET ${column} = ? WHERE tenant_id = ?`, [imageUrl, tenantId]);
+    if (!result.affectedRows) return response.status(409).json({ message: 'Guarda primero los datos del negocio antes de subir la imagen.' });
+    const [rows] = await pool.execute(selectSettings, [tenantId]);
+    return response.status(201).json({ imageUrl, settings: rows[0] });
   } catch (error) { return next(error); }
 });
 

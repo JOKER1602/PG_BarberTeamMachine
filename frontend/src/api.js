@@ -65,6 +65,7 @@ export const api = {
   createReview: (body) => request('/reviews', { method: 'POST', body: JSON.stringify(body) }),
   updateBusinessSettings: (body) => request('/settings', { method: 'PATCH', body: JSON.stringify(body) }),
   uploadPaymentQr: (file) => upload('/settings/payment-qr', file, 'qr'),
+  uploadBrandImage: (kind, file) => upload(`/settings/brand-image/${kind}`, file, 'image'),
   uploadPaymentProof: (file) => upload('/payments/proof', file, 'proof'),
   services: () => request('/services'),
   serviceCategories: () => request('/services/categories'),
@@ -84,7 +85,8 @@ export const api = {
   login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }).then(withSessionRole),
   me: () => request('/auth/me').then(withSessionRole),
   logout: () => request('/auth/logout', { method: 'POST' }),
-  requestPasswordReset: (email) => request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email }) }),
+  // La barbería de origen da la marca del correo y el enlace de vuelta.
+  requestPasswordReset: (email) => request('/auth/forgot-password', { method: 'POST', body: JSON.stringify({ email, tenantSlug: currentTenantSlug() }) }),
   resetPassword: (body) => request('/auth/reset-password', { method: 'POST', body: JSON.stringify(body) }),
   appointments: () => request('/appointments/mine'),
   createAppointments: (body) => request('/appointments/multi', { method: 'POST', body: JSON.stringify(body) }),

@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, clearSession } from '../api.js';
-import { tenantHref } from '../tenant.js';
+import { brandInitials, brandWords, tenantBrand, tenantHref } from '../tenant.js';
+import BrandMark from '../components/BrandMark.jsx';
 
 function useAutoDismiss(message, dismiss, delay = 4500) {
   useEffect(() => {
@@ -38,7 +39,7 @@ export default function PasswordRecoveryPage() {
   }
 
   return <main className="password-recovery-page"><section className="password-recovery-card">
-    <a className="recovery-logo" href={tenantHref('/')}>EMPYREAN<span> STUDIO</span></a>
+    <a className="recovery-logo" href={tenantHref('/')}><BrandMark/></a>
     <p className="section-label">Acceso seguro</p>
     <h1>{token ? 'Crea una nueva contraseña' : 'Recupera tu contraseña'}</h1>
     <p>{token ? 'Elige una contraseña nueva para volver a ingresar a tu cuenta.' : 'Escribe tu correo y te enviaremos un enlace válido por 30 minutos.'}</p>

@@ -71,7 +71,7 @@ async function sendWithMeta({ phone, firstName, appointment, businessName }) {
       type: 'body',
       parameters: [
         { type: 'text', text: firstName || 'cliente' },
-        { type: 'text', text: businessName || 'Empyrean Studio' },
+        { type: 'text', text: businessName || 'tu barbería' },
         { type: 'text', text: appointment.serviceName || 'tu servicio' },
         { type: 'text', text: appointment.barberName || 'tu profesional' },
         { type: 'text', text: appointmentTime(appointment) }

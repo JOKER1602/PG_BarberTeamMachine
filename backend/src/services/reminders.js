@@ -61,10 +61,11 @@ export async function processDueReminders() {
       `SELECT r.id, r.tenant_id AS tenantId, r.appointment_id AS appointmentId, r.channel, r.reminder_type AS reminderType, r.attempts,
         a.starts_at AS startsAt, a.payment_reference AS paymentReference, s.name AS serviceName, b.display_name AS barberName,
         u.id AS userId, u.first_name AS firstName, u.email, u.phone AS clientPhone, u.whatsapp_opt_in_at AS whatsappOptInAt,
-        bs.business_name AS businessName, bs.address, bs.city, bs.phone
+        COALESCE(bs.business_name, t.display_name) AS businessName, bs.address, bs.city, bs.phone
        FROM reminder_jobs r JOIN appointments a ON a.id = r.appointment_id
        JOIN users u ON u.id = a.client_id JOIN services s ON s.id = a.service_id JOIN barbers b ON b.id = a.barber_id
        LEFT JOIN tenant_settings bs ON bs.tenant_id = a.tenant_id
+       JOIN tenants t ON t.id = a.tenant_id
        WHERE r.status = 'PENDING' AND r.scheduled_at <= UTC_TIMESTAMP() AND a.status = 'CONFIRMED'
        AND (r.channel <> 'EMAIL' OR ? = 1) AND (r.channel <> 'WHATSAPP' OR ? = 1)
        AND (r.channel <> 'WHATSAPP' OR a.payment_reference IS NULL OR NOT EXISTS (
@@ -81,9 +82,9 @@ export async function processDueReminders() {
             await connection.execute("UPDATE reminder_jobs SET status = 'CANCELLED', last_error = 'Cita no confirmada o sin consentimiento' WHERE id = ? AND status = 'PENDING'", [job.id]);
             continue;
           }
-          await sendWhatsAppReminder({ phone: current[0].phone, firstName: job.firstName, appointment: job, businessName: job.businessName ?? 'Empyrean Studio' });
+          await sendWhatsAppReminder({ phone: current[0].phone, firstName: job.firstName, appointment: job, businessName: job.businessName });
         }
-        if (job.channel === 'EMAIL') await sendAppointmentReminderEmail({ to: job.email, firstName: job.firstName, appointment: job, business: { businessName: job.businessName ?? 'Empyrean Studio', address: job.address ?? '', city: job.city ?? '', phone: job.phone ?? '' } });
+        if (job.channel === 'EMAIL') await sendAppointmentReminderEmail({ to: job.email, firstName: job.firstName, appointment: job, business: { businessName: job.businessName, address: job.address ?? '', city: job.city ?? '', phone: job.phone ?? '' } });
         if (job.channel === 'IN_APP') await notify(connection, { tenantId: job.tenantId, userId: job.userId, appointmentId: job.appointmentId, type: `REMINDER_${job.reminderType}`, title: `Recordatorio de cita (${job.reminderType})`, message: `Recuerda tu cita de ${job.serviceName} con ${job.barberName}.` });
         await connection.execute("UPDATE reminder_jobs SET status = 'SENT', sent_at = UTC_TIMESTAMP(), attempts = attempts + 1, last_error = NULL WHERE id = ?", [job.id]);
         if (job.channel === 'WHATSAPP' && job.paymentReference) {

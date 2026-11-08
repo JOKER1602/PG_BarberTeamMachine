@@ -430,7 +430,13 @@ La migración se dividió en dos (ver `database/README.md`):
 **Pendiente:**
 - Paso 2: API de plataforma para crear/suspender barberías (hoy se crean por SQL).
 - ~~Paso 5~~ ✅ hecho: frontend con rutas `/t/:slug` y acceso por membresía (ver sección 5). Verificado en el navegador con una segunda barbería: la dueña (cuenta de cliente) entra al panel de su barbería, es cliente en Empyrean y no ve su panel; cerrar sesión y «Atrás» no devuelven el acceso.
-- Marca por barbería: los textos «EMPYREAN STUDIO» del encabezado, títulos y correos siguen fijos; deben salir de `tenant_settings.business_name`.
+- ✅ Marca por barbería (7 de noviembre de 2026): ninguna página, correo ni WhatsApp muestra «Empyrean» fijo.
+  - `GET /api/t/:slug` devuelve `brand` (nombre comercial, ciudad, `logoUrl`, `coverUrl`); `App.jsx` lo carga con `setTenantBrand` antes de mostrar la barbería y fija el título de la pestaña.
+  - `components/BrandMark.jsx` dibuja el logotipo de dos tonos con el nombre de la barbería; `brandInitials()` da el monograma.
+  - Logo y portada por barbería (migración `015_tenant_branding.sql`, columnas `tenant_settings.logo_url`/`cover_url`), subibles desde Administración → Configuración (`POST /settings/brand-image/logo|cover`, archivos en `uploads/brand/`). Sin imagen se muestra un monograma o una portada con el nombre; Empyrean conserva sus imágenes de `/brand/`.
+  - Teléfono, dirección y ciudad salen de la configuración de cada barbería (ya no hay datos de Empyrean como respaldo).
+  - Correos: recordatorios con el nombre de la barbería de la cita; recuperación de contraseña con la marca de la barbería de origen (`/recuperar-contrasena?t=slug`, y el enlace del correo vuelve a ella) o `PLATFORM_NAME`.
+  - Verificado con una segunda barbería sin imágenes y luego con un logo subido desde el panel; Empyrean se ve igual que antes.
 - `POST /appointments/multi` y `POST /payments/proof` aún exigen el rol global `CLIENTE`: personal de una barbería no puede reservar como cliente en otra.
 - Fotos de barberos y QR siguen en carpetas públicas sin prefijo por tenant.
 

@@ -91,3 +91,41 @@ describe('cliente HTTP por barbería', () => {
     expect(result.user).toMatchObject({ role: 'ADMINISTRADOR', globalRole: 'CLIENTE' });
   });
 });
+
+describe('marca por barbería', () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('arma el logotipo y las iniciales desde el nombre de la barbería', async () => {
+    const { brandWords, brandInitials } = await import('./tenant.js');
+    expect(brandWords('Empyrean Studio')).toEqual({ first: 'EMPYREAN', rest: 'STUDIO' });
+    expect(brandWords('Barbería Norte del Sur')).toEqual({ first: 'BARBERÍA', rest: 'NORTE DEL SUR' });
+    expect(brandWords('Navaja')).toEqual({ first: 'NAVAJA', rest: '' });
+    expect(brandInitials('Empyrean Studio')).toBe('ES');
+    expect(brandInitials('barbería norte')).toBe('BN');
+    expect(brandInitials('')).toBe('B');
+  });
+
+  it('usa la marca de la barbería cargada y nunca la de otra por defecto', async () => {
+    const { setTenantBrand, tenantBrand } = await import('./tenant.js');
+    vi.stubGlobal('document', { title: '' });
+    atPath('/t/barberia-norte');
+    const brand = setTenantBrand({ tenant: { slug: 'barberia-norte', displayName: 'Norte S.R.L.' }, brand: { name: 'Barbería Norte', city: 'Cochabamba', logoUrl: null, coverUrl: null } });
+    expect(brand).toEqual({ slug: 'barberia-norte', name: 'Barbería Norte', city: 'Cochabamba', logoUrl: null, coverUrl: null });
+    expect(document.title).toBe('Barbería Norte');
+    expect(tenantBrand().name).toBe('Barbería Norte');
+    // Sin datos de marca se usa el nombre registrado de la barbería.
+    expect(setTenantBrand({ tenant: { slug: 'x', displayName: 'Otra' } }).name).toBe('Otra');
+    expect(setTenantBrand().name).not.toMatch(/empyrean/i);
+  });
+
+  it('la recuperación de contraseña recuerda la barbería de origen', async () => {
+    const { passwordRecoveryHref } = await import('./tenant.js');
+    atPath('/t/barberia-norte/reservar/cita');
+    expect(passwordRecoveryHref()).toBe('/recuperar-contrasena?t=barberia-norte');
+    vi.stubGlobal('window', { location: { pathname: '/recuperar-contrasena', search: '?token=abc&t=barberia-norte' } });
+    expect(currentTenantSlug()).toBe('barberia-norte');
+    expect(tenantHref('/?login=1')).toBe('/t/barberia-norte?login=1');
+    vi.stubGlobal('window', { location: { pathname: '/recuperar-contrasena', search: '?t=No Valido' } });
+    expect(currentTenantSlug()).toBe('empyrean-studio');
+  });
+});

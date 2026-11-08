@@ -59,6 +59,7 @@ const routes = [
   ['settings', 'get', '/'],
   ['settings', 'patch', '/', { body: settingsBody }],
   ['settings', 'post', '/payment-qr', { file: { filename: 'qr-x.png' } }],
+  ['settings', 'post', '/brand-image/:kind', { params: { kind: 'logo' }, file: { filename: 'brand-x.png' } }],
   ['admin', 'get', '/dashboard', { query: { dateFrom: '2026-10-01', dateTo: '2026-10-31' } }],
   ['admin', 'get', '/users'],
   ['admin', 'post', '/barber-accounts', { body: { barberId: 4, email: 'nuevo@test.local', password: 'Temporal123' } }],

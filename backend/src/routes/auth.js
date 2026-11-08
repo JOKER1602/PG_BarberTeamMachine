@@ -196,10 +196,19 @@ router.patch('/me/password', requireAuth, async (request, response, next) => {
 });
 
 router.post('/forgot-password', async (request, response, next) => {
-  const parsed = z.object({ email: z.string().email() }).safeParse(request.body);
+  const parsed = z.object({ email: z.string().email(), tenantSlug: z.string().max(80).optional() }).safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Correo invalido' });
   }
+  // Barbería desde la que se pidió el cambio: da la marca del correo y el
+  // enlace de vuelta. Si no existe o no está activa, se usa la marca general.
+  const [brandRows] = parsed.data.tenantSlug
+    ? await pool.execute(
+      `SELECT t.slug, COALESCE(ts.business_name, t.display_name) AS brandName
+       FROM tenants t LEFT JOIN tenant_settings ts ON ts.tenant_id = t.id
+       WHERE t.slug = ? AND t.status IN ('TRIAL', 'ACTIVE')`, [parsed.data.tenantSlug]).catch(() => [[]])
+    : [[]];
+  const brand = brandRows[0];
 
   try {
     if (!isEmailConfigured()) {
@@ -211,12 +220,12 @@ router.post('/forgot-password', async (request, response, next) => {
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
       const frontendUrl = (process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/$/, '');
-      const resetUrl = `${frontendUrl}/recuperar-contrasena?token=${rawToken}`;
+      const resetUrl = `${frontendUrl}/recuperar-contrasena?token=${rawToken}${brand ? `&t=${brand.slug}` : ''}`;
 
       await pool.execute('UPDATE password_reset_tokens SET used_at = UTC_TIMESTAMP() WHERE user_id = ? AND used_at IS NULL', [rows[0].id]);
       await pool.execute('INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 MINUTE))', [rows[0].id, tokenHash]);
       try {
-        await sendPasswordResetEmail({ to: rows[0].email, firstName: rows[0].firstName, resetUrl });
+        await sendPasswordResetEmail({ to: rows[0].email, firstName: rows[0].firstName, resetUrl, brandName: brand?.brandName });
       } catch (emailError) {
         await pool.execute('DELETE FROM password_reset_tokens WHERE token_hash = ?', [tokenHash]);
         return response.status(502).json({ message: 'No se pudo enviar el correo de recuperación. Intenta nuevamente más tarde.' });

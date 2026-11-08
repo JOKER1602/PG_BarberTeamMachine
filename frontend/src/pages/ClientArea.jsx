@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, getStoredSession, logoutToHome, saveSession } from '../api.js';
-import { tenantHref } from '../tenant.js';
+import { brandInitials, brandWords, tenantBrand, tenantHref } from '../tenant.js';
+import BrandMark from '../components/BrandMark.jsx';
 
 function useAutoDismiss(message, dismiss, delay = 4500) {
   useEffect(() => {
@@ -21,7 +22,7 @@ function rescheduleUrl(appointment, bookingAppointments) {
 }
 
 function AppointmentDetail({ appointment, bookingAppointments = [appointment], statusLabel, onCancel, settings }) {
-  const business = settings ?? { businessName: 'Empyrean Studio', address: 'Buenos Aires 130', city: 'Cochabamba', country: 'Bolivia', phone: '77469963', whatsapp: '59177469963', mapsUrl: 'https://maps.app.goo.gl/At4qrWe6P2KrDCyW9' };
+  const business = settings ?? { businessName: tenantBrand().name, address: '', city: tenantBrand().city, country: '', phone: '', whatsapp: '', hoursText: '', mapsUrl: null };
   const startsAt = new Date(appointment.startsAt);
   const endsAt = new Date(appointment.endsAt);
   const dateLabel = startsAt.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'short', year: 'numeric' });
@@ -42,7 +43,7 @@ function AppointmentDetail({ appointment, bookingAppointments = [appointment], s
     setReviewing(false);
   }
   return <><aside className="appointment-detail">
-    <div className="appointment-banner">{appointment.barberPhotoUrl ? <img className="appointment-barber-photo" src={appointment.barberPhotoUrl} alt={`Barbero ${appointment.barberName}`}/> : <span>ES</span>}<b>EMPYREAN<br/>STUDIO</b><small>{appointment.barberName}</small></div>
+    <div className="appointment-banner">{appointment.barberPhotoUrl ? <img className="appointment-barber-photo" src={appointment.barberPhotoUrl} alt={`Barbero ${appointment.barberName}`}/> : <span>{brandInitials()}</span>}<b><BrandMark stacked/></b><small>{appointment.barberName}</small></div>
     <div className="appointment-detail-body">
       <p className={`appointment-status ${appointment.status.toLowerCase()}`}>{statusLabel[appointment.status] ?? appointment.status}</p>
       <h2>{dateLabel} a las {timeLabel}</h2>
@@ -87,7 +88,7 @@ function ReviewModal({ appointment, onClose, onSubmit }) {
   </div>;
 }
 
-function CancelAppointmentModal({ appointment, onClose, onConfirm }) {
+function CancelAppointmentModal({ appointment, onClose, onConfirm, settings }) {
   const startsAt = new Date(appointment.startsAt);
   return <div className="cancel-modal-backdrop" role="dialog" aria-modal="true" aria-label="Cancelar cita">
     <section className="cancel-modal">
@@ -95,9 +96,9 @@ function CancelAppointmentModal({ appointment, onClose, onConfirm }) {
       <div className="cancel-modal-content">
         <p className="section-label">Gestionar cita</p>
         <h1>¿Estás seguro de que deseas cancelar?</h1>
-        <article><div className="cancel-brand">ES</div><div><b>Empyrean Studio</b><span>{startsAt.toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} a las {startsAt.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</span><small>Bs {Number(appointment.price ?? 0).toFixed(0)} · {appointment.serviceName}</small></div></article>
-        <p>¿No estás seguro? Ponte en contacto directamente con Empyrean Studio.</p>
-        <a href="tel:+59177469963">☎ &nbsp; Llamar</a>
+        <article><div className="cancel-brand">{brandInitials()}</div><div><b>{tenantBrand().name}</b><span>{startsAt.toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} a las {startsAt.toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</span><small>Bs {Number(appointment.price ?? 0).toFixed(0)} · {appointment.serviceName}</small></div></article>
+        <p>¿No estás seguro? Ponte en contacto directamente con {tenantBrand().name}.</p>
+        {settings?.phone && <a href={`tel:+591${String(settings.phone ?? '').replace(/D/g, '').replace(/^591/, '')}`}>☎ &nbsp; Llamar</a>}
       </div>
     </section>
   </div>;
@@ -230,7 +231,7 @@ export default function ClientArea() {
   const statusLabel = { PENDING: 'Anticipo en revisión', CONFIRMED: 'Confirmada', COMPLETED: 'Atendida', CANCELLED: 'Cancelada', NO_SHOW: 'No asistió' };
 
   return <main className="client-area">
-    <header className="client-header"><a href={tenantHref('/')}>EMPYREAN<span> STUDIO</span></a><div><span>{session.firstName} {session.lastName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
+    <header className="client-header"><a href={tenantHref('/')}><BrandMark/></a><div><span>{session.firstName} {session.lastName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
     <div className="client-layout">
       <aside className="client-menu"><p>MI CUENTA</p><strong>{session.firstName} {session.lastName}</strong><button className={activeTab === 'perfil' ? 'active' : ''} onClick={() => changeTab('perfil')}>◉ &nbsp; Perfil</button><button className={activeTab === 'historial' ? 'active' : ''} onClick={() => changeTab('historial')}>◷ &nbsp; Historial</button></aside>
       <section className="client-content">
@@ -239,7 +240,7 @@ export default function ClientArea() {
         {activeTab === 'historial' && <div className="client-history"><p className="section-label">Mi cuenta</p><h1>Mis citas</h1><div className="history-filters"><button className={historyView === 'programadas' ? 'active' : ''} onClick={() => setHistoryView('programadas')}>Programadas <b>{programmed.length}</b></button><button className={historyView === 'historial' ? 'active' : ''} onClick={() => setHistoryView('historial')}>Historial <b>{pastAppointments.length}</b></button></div><h2>{historyView === 'programadas' ? 'Citas programadas' : 'Citas anteriores'} <span>{visibleAppointments.length}</span></h2>{appointments.length ? visibleAppointments.length ? <div className="history-grid"><div className="history-list">{visibleAppointments.map((appointment) => <button className={selectedAppointment?.id === appointment.id ? 'active' : ''} key={appointment.id} onClick={() => setSelectedAppointmentId(appointment.id)}><b>{appointment.serviceName}</b><span>{new Date(appointment.startsAt).toLocaleDateString('es-BO', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })} · {new Date(appointment.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</span><small>Con {appointment.barberName} · {statusLabel[appointment.status]}</small></button>)}</div>{selectedAppointment && <AppointmentDetail appointment={selectedAppointment} bookingAppointments={selectedAppointment.paymentReference ? appointments.filter((item) => item.paymentReference === selectedAppointment.paymentReference).sort((left, right) => new Date(left.startsAt) - new Date(right.startsAt)) : [selectedAppointment]} statusLabel={statusLabel} onCancel={setAppointmentToCancel} settings={settings}/>}</div> : <div className="history-empty"><b>◷</b><h2>No hay citas en este apartado.</h2><p>{historyView === 'programadas' ? 'Tus reservas pendientes de pago o confirmadas aparecerán aquí.' : 'Aquí verás tus citas finalizadas, atendidas, canceladas o no asistidas.'}</p></div> : <div className="history-empty"><b>◷</b><h2>Aún no tienes citas.</h2><p>Cuando confirmes una reserva aparecerá aquí.</p><a href={tenantHref('/reservar')}>Reservar una cita</a></div>}</div>}
       </section>
     </div>
-    {appointmentToCancel && <CancelAppointmentModal appointment={appointmentToCancel} onClose={() => setAppointmentToCancel(null)} onConfirm={() => cancelAppointment(appointmentToCancel)}/>} 
+    {appointmentToCancel && <CancelAppointmentModal settings={settings} appointment={appointmentToCancel} onClose={() => setAppointmentToCancel(null)} onConfirm={() => cancelAppointment(appointmentToCancel)}/>} 
   </main>;
 }
 

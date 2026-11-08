@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
 import { api, clearSession, getStoredSession, saveSession } from '../api.js';
-import { tenantHref } from '../tenant.js';
+import { brandInitials, brandWords, passwordRecoveryHref, tenantBrand, tenantHref } from '../tenant.js';
+import BrandMark from '../components/BrandMark.jsx';
 
 const weekdays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
@@ -317,7 +318,7 @@ export default function ReservationWizard() {
   return <main className="reservation-wizard">
     {step !== 4 && <header className="wizard-header">
       <a href={tenantHref('/reservar')} aria-label="Volver a servicios" title="Volver a servicios"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></a>
-      <a className="wizard-logo" href={tenantHref('/')}>EMPYREAN<span> STUDIO</span></a>
+      <a className="wizard-logo" href={tenantHref('/')}><BrandMark/></a>
       <nav className="wizard-steps" aria-label="Progreso de la reserva">
         <span className={step >= 1 ? 'active' : ''}><b>1</b><em>Servicios</em></span><i aria-hidden="true"/>
         <span className={step >= 2 ? 'active' : ''}><b>2</b><em>Detalles</em></span><i aria-hidden="true"/>
@@ -402,7 +403,7 @@ export default function ReservationWizard() {
         <div className="summary-total"><span>Total · {totalDuration} min</span><b>Bs {totalPrice.toFixed(0)}</b></div>
         {selectedSlot ? <button className="wizard-primary" onClick={continueWithSelectedTime}>{rescheduleId ? 'Guardar nuevo horario' : 'Continuar'}</button> : <small>Selecciona un horario para continuar.</small>}
       </aside>
-      <section className="wizard-trust-panel" aria-label="Información de Empyrean Studio"><div className="wizard-trust-highlight"><span aria-hidden="true">✦</span><p>Vive la experiencia<br/><b>EMPYREAN <i>STUDIO</i></b></p><small>Tu cita queda organizada con disponibilidad real y atención profesional.</small></div><div className="wizard-trust-stats"><span><b>▣</b>Citas<br/>confiables</span><span><b>◇</b>Profesionales<br/>certificados</span><span><b>☆</b>Ambiente<br/>premium</span></div></section>
+      <section className="wizard-trust-panel" aria-label={`Información de ${tenantBrand().name}`}><div className="wizard-trust-highlight"><span aria-hidden="true">✦</span><p>Vive la experiencia<br/><b>{brandWords().first} <i>{brandWords().rest}</i></b></p><small>Tu cita queda organizada con disponibilidad real y atención profesional.</small></div><div className="wizard-trust-stats"><span><b>▣</b>Citas<br/>confiables</span><span><b>◇</b>Profesionales<br/>certificados</span><span><b>☆</b>Ambiente<br/>premium</span></div></section>
       </div>
     </section>}
 
@@ -416,7 +417,7 @@ export default function ReservationWizard() {
         <article className="checkout-card"><b>Política de anticipo y asistencia</b><p>Para confirmar tu reserva se requiere un anticipo equivalente al 50 % del valor total. Este importe asegura el horario seleccionado y se descuenta del saldo a pagar el día de tu atención. En caso de inasistencia, el anticipo no es reembolsable.</p></article>
       </div>
       <aside className="checkout-summary">
-        <h2>Empyrean Studio · Cochabamba</h2>
+        <h2>{tenantBrand().name}{tenantBrand().city ? ` · ${tenantBrand().city}` : ''}</h2>
         <p>📅 {selection.date && new Date(`${selection.date}T12:00:00`).toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long' })}</p>
         <p>◷ {selectedSlot && new Date(selectedSlot.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })} · {totalDuration} min</p>
         <hr/>
@@ -428,7 +429,7 @@ export default function ReservationWizard() {
       </aside>
     </section>}
 
-    {step === 4 && <section className="appointment-confirmed"><div><span>✓</span><h1>Cita confirmada</h1><p>Te esperamos en Empyrean Studio.</p><a href={tenantHref('/reservar')}>Volver a la barbería</a></div></section>}
+    {step === 4 && <section className="appointment-confirmed"><div><span>✓</span><h1>Cita confirmada</h1><p>Te esperamos en {tenantBrand().name}.</p><a href={tenantHref('/reservar')}>Volver a la barbería</a></div></section>}
 
     {showProfessionalModal && <div className="professional-modal-backdrop" role="dialog" aria-modal="true" aria-label="Elegir profesional">
       <section className="professional-modal">
@@ -439,10 +440,10 @@ export default function ReservationWizard() {
         <h2>Elige una opción</h2>
         <div className="professional-list">
           {filteredBarbers.length > 0 && <button className="random-professional" onClick={chooseRandomProfessional}><b>✦</b><strong>Cualquier profesional</strong><span>Te asignamos uno al azar entre los disponibles</span><i>Elegir esta opción</i></button>}
-          {filteredBarbers.map((barber) => <button key={barber.id} onClick={() => chooseProfessional(barber.id)}>{barber.photoUrl ? <img className="barber-avatar-photo" src={barber.photoUrl} alt=""/> : <b>{barber.displayName.slice(0, 1)}</b>}<strong>{barber.displayName}</strong><span>{barber.services || 'Barbero'}</span><i>★ Profesional Empyrean</i></button>)}
+          {filteredBarbers.map((barber) => <button key={barber.id} onClick={() => chooseProfessional(barber.id)}>{barber.photoUrl ? <img className="barber-avatar-photo" src={barber.photoUrl} alt=""/> : <b>{barber.displayName.slice(0, 1)}</b>}<strong>{barber.displayName}</strong><span>{barber.services || 'Barbero'}</span><i>★ Profesional {tenantBrand().name}</i></button>)}
           {!filteredBarbers.length && <span className="empty-state">No hay profesionales que realicen todos los servicios seleccionados.</span>}
         </div>
-        <footer>Los profesionales mostrados están habilitados para atender las reservas de Empyrean Studio.</footer>
+        <footer>Los profesionales mostrados están habilitados para atender las reservas de {tenantBrand().name}.</footer>
       </section>
     </div>}
 
@@ -460,7 +461,7 @@ export default function ReservationWizard() {
           {error && <p className="reservation-auth-error">{error}</p>}
           <button className="wizard-primary">{authMode === 'login' ? 'Continuar' : 'Crear cuenta'}</button>
         </form>
-        {authMode === 'login' && <a className="forgot-password-link" href="/recuperar-contrasena">¿Olvidaste tu contraseña?</a>}
+        {authMode === 'login' && <a className="forgot-password-link" href={passwordRecoveryHref()}>¿Olvidaste tu contraseña?</a>}
         <button type="button" className="text-button" onClick={() => { setAuthMode(authMode === 'login' ? 'register' : 'login'); setAuthSubmitted(false); setError(''); }}>{authMode === 'login' ? 'Crear una cuenta' : 'Ya tengo una cuenta'}</button>
       </section>
     </div>}
