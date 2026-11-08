@@ -3,6 +3,8 @@ import { z } from 'zod';
 import pool from '../config/database.js';
 import { requireAuth } from '../middleware/auth.js';
 import { createImageUpload } from '../middleware/image-upload.js';
+import { uploadLimiter } from '../middleware/rate-limit.js';
+import { publicUploadUrl } from '../config/paths.js';
 import { TENANT_ADMIN_ROLES, requireTenantMembership, tenantIdOf } from '../middleware/tenant.js';
 
 // Aislado por tenant: profesionales, sus servicios, horarios y bloqueos solo se
@@ -139,12 +141,12 @@ router.patch('/:id', ...requireTenantAdmin, async (request, response, next) => {
   } catch (error) { await connection.rollback(); return next(error); } finally { connection.release(); }
 });
 
-router.post('/:id/photo', ...requireTenantAdmin, photoUpload.single('photo'), async (request, response, next) => {
+router.post('/:id/photo', ...requireTenantAdmin, uploadLimiter, photoUpload.single('photo'), async (request, response, next) => {
   const id = positiveId.safeParse(request.params.id);
   if (!id.success) return response.status(400).json({ message: 'Barbero inválido' });
   if (!request.file) return response.status(400).json({ message: 'Selecciona una imagen JPG, PNG o WEBP de hasta 5 MB' });
   try {
-    const photoUrl = `${request.protocol}://${request.get('host')}/uploads/barbers/${request.file.filename}`;
+    const photoUrl = publicUploadUrl('barbers', request.file.filename);
     const [result] = await pool.execute('UPDATE barbers SET photo_url = ? WHERE id = ? AND tenant_id = ?', [photoUrl, id.data, tenantIdOf(request)]);
     if (!result.affectedRows) return barberNotFound(response);
     return response.status(201).json({ photoUrl, message: 'Foto del barbero actualizada' });

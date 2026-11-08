@@ -118,6 +118,7 @@ export const api = {
   // Operadores de la plataforma (global, sin /t/:slug).
   platformTenants: () => request('/platform/tenants'),
   createTenant: (body) => request('/platform/tenants', { method: 'POST', body: JSON.stringify(body) }),
+  addTenantOwner: (slug, body) => request(`/platform/tenants/${encodeURIComponent(slug)}/owners`, { method: 'POST', body: JSON.stringify(body) }),
   updateTenant: (slug, body) => request(`/platform/tenants/${encodeURIComponent(slug)}`, { method: 'PATCH', body: JSON.stringify(body) }),
   setUserActive: (id, isActive) => request(`/admin/users/${id}`, { method: 'PATCH', body: JSON.stringify({ isActive }) })
 };

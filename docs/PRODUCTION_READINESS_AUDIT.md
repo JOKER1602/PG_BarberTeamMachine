@@ -1,5 +1,7 @@
 # Auditoría de preparación para producción
 
+> **Actualización 8 de noviembre de 2026:** esta auditoría es anterior a la conversión SaaS. La guía vigente es [PRODUCTION_LAUNCH.md](PRODUCTION_LAUNCH.md). Desde entonces quedaron resueltos en el código: límite de intentos (punto 8, en memoria para una instancia), carpeta de subidas persistente configurable (`UPLOADS_DIR`, punto 7), CSP y demás cabeceras, salud con base de datos, respaldos con `npm run db:backup` y dependencias sin vulnerabilidades. Siguen siendo tareas de despliegue los puntos 1, 2, 5, 6 y 9.
+
 Fecha de revisión: 5 de noviembre de 2026.
 
 ## Corregido durante la auditoría

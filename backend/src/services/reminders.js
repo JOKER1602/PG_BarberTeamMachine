@@ -73,7 +73,7 @@ export async function processDueReminders() {
          SELECT 1 FROM appointments earlier WHERE earlier.payment_reference = a.payment_reference AND earlier.status = 'CONFIRMED'
          AND (earlier.starts_at < a.starts_at OR (earlier.starts_at = a.starts_at AND earlier.id < a.id))
        ))
-       ORDER BY r.scheduled_at ASC LIMIT 20`, [Number(isEmailConfigured()), Number(isWhatsAppConfigured())]
+       ORDER BY r.scheduled_at ASC LIMIT 100`, [Number(isEmailConfigured()), Number(isWhatsAppConfigured())]
     );
     for (const job of jobs) {
       try {
@@ -105,4 +105,5 @@ export function startReminderWorker() {
   processDueReminders().catch((error) => console.error('Error al procesar recordatorios:', error.message));
   const timer = setInterval(() => processDueReminders().catch((error) => console.error('Error al procesar recordatorios:', error.message)), 5 * 60_000);
   timer.unref();
+  return () => clearInterval(timer);
 }

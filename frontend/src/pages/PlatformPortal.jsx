@@ -4,6 +4,7 @@ import { api, clearSession } from '../api.js';
 // Panel de los operadores de la plataforma: alta de barberías y cambio de
 // estado. No muestra datos de clientes ni de citas de ninguna barbería.
 const statusLabels = { TRIAL: 'Prueba', ACTIVE: 'Activa', SUSPENDED: 'Suspendida', CANCELLED: 'Dada de baja' };
+const emptyOwnerForm = { slug: '', email: '', firstName: '', lastName: '', temporaryPassword: '' };
 const emptyForm = { displayName: '', slug: '', city: '', phone: '', address: '', status: 'TRIAL', ownerEmail: '', ownerFirstName: '', ownerLastName: '', ownerPassword: '' };
 
 function slugify(value) {
@@ -41,6 +42,7 @@ export default function PlatformPortal() {
   const [tenants, setTenants] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [slugTouched, setSlugTouched] = useState(false);
+  const [ownerForm, setOwnerForm] = useState(emptyOwnerForm);
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -62,6 +64,20 @@ export default function PlatformPortal() {
       });
       setMessage(`${result.tenant.displayName} creada en /t/${result.tenant.slug}. ${result.owner.accountCreated ? 'Se creó la cuenta del dueño: deberá cambiar la contraseña temporal al entrar.' : 'El dueño ya tenía cuenta y ahora administra la barbería.'}`);
       setForm(emptyForm); setSlugTouched(false);
+      await reload();
+    } catch (requestError) { setError(requestError.message); }
+  }
+
+  // Asigna un dueño a una barbería ya creada (p. ej. la inicial de una instalación nueva).
+  async function addOwner(event) {
+    event.preventDefault();
+    setError(''); setMessage('');
+    try {
+      const result = await api.addTenantOwner(ownerForm.slug, {
+        email: ownerForm.email, firstName: ownerForm.firstName || undefined, lastName: ownerForm.lastName || undefined, temporaryPassword: ownerForm.temporaryPassword || undefined
+      });
+      setMessage(`${result.owner.email} ahora es dueño de /t/${ownerForm.slug}.${result.owner.accountCreated ? ' Deberá cambiar la contraseña temporal al entrar.' : ''}`);
+      setOwnerForm(emptyOwnerForm);
       await reload();
     } catch (requestError) { setError(requestError.message); }
   }
@@ -128,6 +144,17 @@ export default function PlatformPortal() {
           <label>Contraseña temporal <small>Si es cuenta nueva</small><input type="password" autoComplete="new-password" minLength="8" value={form.ownerPassword} onChange={(event) => setForm({ ...form, ownerPassword: event.target.value })}/></label>
         </fieldset>
         <button>Crear barbería</button>
+      </form>
+    </section>
+    <section className="admin-card">
+      <h3>Asignar dueño a una barbería existente</h3>
+      <form className="admin-form platform-form" onSubmit={addOwner}>
+        <label>Barbería<select required value={ownerForm.slug} onChange={(event) => setOwnerForm({ ...ownerForm, slug: event.target.value })}><option value="">Selecciona…</option>{tenants.filter((tenant) => tenant.status !== 'CANCELLED').map((tenant) => <option key={tenant.slug} value={tenant.slug}>{tenant.displayName} (/t/{tenant.slug})</option>)}</select></label>
+        <label>Correo del dueño<input type="email" required value={ownerForm.email} onChange={(event) => setOwnerForm({ ...ownerForm, email: event.target.value })}/></label>
+        <label>Nombre <small>Si es cuenta nueva</small><input value={ownerForm.firstName} onChange={(event) => setOwnerForm({ ...ownerForm, firstName: event.target.value })}/></label>
+        <label>Apellido <small>Si es cuenta nueva</small><input value={ownerForm.lastName} onChange={(event) => setOwnerForm({ ...ownerForm, lastName: event.target.value })}/></label>
+        <label>Contraseña temporal <small>Si es cuenta nueva</small><input type="password" autoComplete="new-password" minLength="8" value={ownerForm.temporaryPassword} onChange={(event) => setOwnerForm({ ...ownerForm, temporaryPassword: event.target.value })}/></label>
+        <button>Asignar dueño</button>
       </form>
     </section>
   </main>;

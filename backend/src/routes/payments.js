@@ -6,16 +6,18 @@ import { z } from 'zod';
 import pool from '../config/database.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { createImageUpload } from '../middleware/image-upload.js';
+import { uploadLimiter } from '../middleware/rate-limit.js';
 import { TENANT_ADMIN_ROLES, requireTenantMembership, tenantIdOf } from '../middleware/tenant.js';
+import { uploadsPath } from '../config/paths.js';
 
 // Aislado por tenant: cada comprobante pertenece a una barbería y a un cliente.
 // El archivo se guarda en uploads/payments/<tenant_id>/ y solo lo abre la
 // administración de esa barbería.
 const router = Router();
 const proofUpload = createImageUpload({ folder: 'payments', prefix: 'proof', label: 'comprobante' });
-const proofsRoot = path.resolve(process.cwd(), 'uploads', 'payments');
+const proofsRoot = uploadsPath('payments');
 
-router.post('/proof', requireAuth, requireRole('CLIENTE'), proofUpload.single('proof'), async (request, response, next) => {
+router.post('/proof', requireAuth, requireRole('CLIENTE'), uploadLimiter, proofUpload.single('proof'), async (request, response, next) => {
   if (!request.file) return response.status(400).json({ message: 'Selecciona una imagen de comprobante.' });
   const proofId = randomUUID();
   const uploadedPath = path.join(request.file.destination, request.file.filename);

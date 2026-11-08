@@ -515,6 +515,10 @@ La migración se dividió en dos (ver `database/README.md`):
 
 ---
 
+### Preparación para producción (8 de noviembre de 2026)
+
+Ver **[PRODUCTION_LAUNCH.md](PRODUCTION_LAUNCH.md)**: estado, decisiones del negocio, arquitectura (un servicio Node + MySQL 8 administrado + volumen) y puesta en marcha de las 4 primeras barberías. Resuelto en código: límite de intentos (`middleware/rate-limit.js`), `UPLOADS_DIR`, rutas relativas de archivos (migración 016), API sirviendo el frontend (`SERVE_FRONTEND`), CSP, `/api/health/ready`, cierre ordenado, `Dockerfile`, `npm run db:backup`, `npm run verify:fresh-install`, asignación de dueños a barberías existentes (`POST /api/platform/tenants/:slug/owners`) y dependencias sin vulnerabilidades (bcrypt 6, zod 4).
+
 ### Instrucción breve para la siguiente IA
 
 > Continúa el proyecto Empyrean Studio desde el repositorio local. Es una aplicación React/Vite + Express/MySQL funcional para una barbería, con pagos QR manuales, roles, agenda, recordatorios y analítica. La decisión actual es **no publicar aún**: primero implementar SaaS multiempresa de forma segura. Lee `docs/AI_PROJECT_HANDOFF.md`, luego `docs/MULTITENANCY_ARCHITECTURE.md`, El Incremento 1 está hecho (`backend/src/middleware/tenant.js`, JWT solo con identidad, `database/013_saas_foundation.sql`); sigue el Incremento 2. No ejecutes `database/014_tenant_isolation.sql` hasta que backend y frontend filtren absolutamente todos los datos por `tenant_id`. Conserva los módulos ya funcionales y no expongas secretos ni comprobantes de pago.

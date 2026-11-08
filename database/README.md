@@ -1,10 +1,18 @@
 # Esquema y migraciones
 
-Para crear una base de datos nueva, ejecutar solamente estos archivos y en este orden:
+Para crear una base de datos nueva (producción SaaS), ejecutar solamente estos archivos y en este orden:
 
 1. `001_initial_schema.sql`
 2. `002_barber_role.sql`
 3. `007_service_categories.sql`
+4. `013_saas_foundation.sql`
+5. `014_tenant_isolation.sql`
+6. `015_tenant_branding.sql`
+7. `016_relative_upload_urls.sql`
+
+`npm run verify:fresh-install` aplica esta secuencia en una base temporal y recorre la puesta en marcha completa. Ver también `docs/PRODUCTION_LAUNCH.md`.
+
+`016_relative_upload_urls.sql` convierte las direcciones de archivos guardadas con dominio (`http://host/uploads/...`) en rutas relativas; es idempotente y conviene aplicarla también al migrar una base existente.
 
 El archivo inicial contiene el modelo vigente de citas, pagos por QR, reseñas, configuraciones y recordatorios. Las migraciones `003` a `009` se mantienen como historial para instalaciones creadas en versiones anteriores; no deben volver a ejecutarse sobre una base creada con el esquema inicial actual.
 

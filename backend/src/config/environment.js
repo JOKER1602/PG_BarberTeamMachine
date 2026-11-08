@@ -29,6 +29,15 @@ function assertProductionConfiguration() {
   if (errors.length > 0) throw new Error(`Configuración de producción insegura:\n- ${errors.join('\n- ')}`);
 }
 
+// Avisos que no impiden arrancar pero sí afectan a las barberías.
+function warnProductionGaps() {
+  if (process.env.NODE_ENV !== 'production') return;
+  if (!process.env.UPLOADS_DIR) console.warn('AVISO: UPLOADS_DIR no está definido; fotos, QR y comprobantes se perderán al redeplegar si el disco no es persistente.');
+  if (!process.env.EMAIL_HOST) console.warn('AVISO: el correo SMTP no está configurado; no habrá recuperación de contraseña ni recordatorios por correo.');
+  if (process.env.TRUST_PROXY !== 'true') console.warn('AVISO: TRUST_PROXY no está activo; detrás de un proxy, el límite de intentos verá la IP del proxy.');
+}
+
 export function validateEnvironment() {
   assertProductionConfiguration();
+  warnProductionGaps();
 }

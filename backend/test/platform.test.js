@@ -92,3 +92,25 @@ test('cambia el estado de una barbería y valida el cambio', async () => {
   assert.equal((await run('/tenants/:slug', 'patch', { params: { slug: 'barberia-sur' }, body: { status: 'BORRADA' } })).status, 400);
   assert.equal((await run('/tenants/:slug', 'patch', { params: { slug: 'barberia-sur' }, body: {} })).status, 400);
 });
+
+test('asigna un dueño a una barbería existente sin duplicar la membresía', async () => {
+  const db = fakeDb({ existingUser: { id: 40, isActive: 1 } });
+  const execute = db.execute;
+  db.execute = async (sql, values) => (sql.includes('FROM tenants WHERE slug = ? FOR UPDATE') ? [[{ id: 'tenant-empyrean' }]] : execute(sql, values));
+  db.connection.execute = db.execute;
+  const original = { execute: pool.execute, getConnection: pool.getConnection };
+  Object.assign(pool, { execute: db.execute, getConnection: async () => db.connection });
+  try {
+    const result = await new Promise((resolve, reject) => {
+      const response = { statusCode: 200, status(code) { this.statusCode = code; return this; }, json(payload) { resolve({ status: this.statusCode, body: payload }); return this; } };
+      Promise.resolve(handler('/tenants/:slug/owners', 'post')({ params: { slug: 'empyrean-studio' }, body: { email: 'Dueno@Empyrean.test' }, auth: { sub: '1' } }, response, reject)).catch(reject);
+    });
+    assert.equal(result.status, 201);
+    assert.equal(result.body.owner.accountCreated, false);
+    const membership = db.calls.find((call) => call.sql.includes('INSERT INTO tenant_memberships'));
+    assert.deepEqual(membership.values, ['tenant-empyrean', 40]);
+    assert.match(membership.sql, /ON DUPLICATE KEY UPDATE role = 'OWNER'/);
+  } finally { Object.assign(pool, original); }
+  assert.equal((await run('/tenants/:slug/owners', 'post', { params: { slug: 'no-existe' }, body: { email: 'a@b.test' } })).status, 404);
+  assert.equal((await run('/tenants/:slug/owners', 'post', { params: { slug: 'empyrean-studio' }, body: { email: 'nuevo@b.test' } })).status, 404, 'sin barbería simulada responde 404');
+});

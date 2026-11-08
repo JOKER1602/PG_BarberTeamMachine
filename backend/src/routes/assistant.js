@@ -5,6 +5,7 @@ import { zonedParts } from '../config/time.js';
 import { findAvailableSlotsForDate } from '../services/appointment-availability.js';
 import { interpretBookingRequest } from '../services/booking-assistant.js';
 import { tenantIdOf } from '../middleware/tenant.js';
+import { assistantLimiter } from '../middleware/rate-limit.js';
 
 const router = Router();
 const requestSchema = z.object({ query: z.string().trim().min(3).max(400) });
@@ -15,7 +16,7 @@ function addDays(date, days) {
   return value.toISOString().slice(0, 10);
 }
 
-router.post('/query', async (request, response, next) => {
+router.post('/query', assistantLimiter, async (request, response, next) => {
   const parsed = requestSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Escribe una consulta de al menos tres caracteres.' });
   const tenantId = tenantIdOf(request);

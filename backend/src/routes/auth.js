@@ -6,6 +6,7 @@ import pool from '../config/database.js';
 import { clearAuthCookie, requireAuth, setAuthCookie } from '../middleware/auth.js';
 import { isEmailConfigured, sendPasswordResetEmail } from '../services/email.js';
 import { normalizeBolivianPhone } from '../services/whatsapp.js';
+import { changePasswordLimiter, loginLimiters, passwordResetLimiters, registerLimiter, resetPasswordLimiter } from '../middleware/rate-limit.js';
 
 const router = Router();
 const emailSchema = z.string().email().transform((value) => value.toLowerCase().trim());
@@ -55,7 +56,7 @@ async function sessionUser(user) {
   return { ...publicUser(user), memberships, isPlatformAdmin: platformRows.length > 0 };
 }
 
-router.post('/register', async (request, response, next) => {
+router.post('/register', registerLimiter, async (request, response, next) => {
   const parsed = registrationSchema.safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Datos de registro invalidos', errors: parsed.error.flatten() });
@@ -88,7 +89,7 @@ router.post('/register', async (request, response, next) => {
   }
 });
 
-router.post('/login', async (request, response, next) => {
+router.post('/login', ...loginLimiters, async (request, response, next) => {
   const parsed = credentialsSchema.safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Credenciales invalidas' });
@@ -183,7 +184,7 @@ router.patch('/me', requireAuth, async (request, response, next) => {
   finally { connection?.release(); }
 });
 
-router.patch('/me/password', requireAuth, async (request, response, next) => {
+router.patch('/me/password', requireAuth, changePasswordLimiter, async (request, response, next) => {
   const parsed = z.object({ currentPassword: z.string().min(8), password: securePasswordSchema }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de contrasena invalidos' });
   try {
@@ -196,7 +197,7 @@ router.patch('/me/password', requireAuth, async (request, response, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/forgot-password', async (request, response, next) => {
+router.post('/forgot-password', ...passwordResetLimiters, async (request, response, next) => {
   const parsed = z.object({ email: z.string().email(), tenantSlug: z.string().max(80).optional() }).safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Correo invalido' });
@@ -220,7 +221,8 @@ router.post('/forgot-password', async (request, response, next) => {
     if (rows.length > 0) {
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-      const frontendUrl = (process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/$/, '');
+      // FRONTEND_URL admite varios orígenes (CORS); el enlace usa el primero.
+      const frontendUrl = ((process.env.FRONTEND_URL ?? '').split(',')[0].trim() || 'http://localhost:5173').replace(/\/$/, '');
       const resetUrl = `${frontendUrl}/recuperar-contrasena?token=${rawToken}${brand ? `&t=${brand.slug}` : ''}`;
 
       await pool.execute('UPDATE password_reset_tokens SET used_at = UTC_TIMESTAMP() WHERE user_id = ? AND used_at IS NULL', [rows[0].id]);
@@ -239,7 +241,7 @@ router.post('/forgot-password', async (request, response, next) => {
   }
 });
 
-router.post('/reset-password', async (request, response, next) => {
+router.post('/reset-password', resetPasswordLimiter, async (request, response, next) => {
   const parsed = z.object({
     token: z.string().length(64),
     password: securePasswordSchema

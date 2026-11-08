@@ -1,6 +1,8 @@
 import cors from 'cors';
 import express from 'express';
 import path from 'node:path';
+import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import authRouter from './routes/auth.js';
 import adminRouter from './routes/admin.js';
 import barberPortalRouter from './routes/barber-portal.js';
@@ -17,10 +19,11 @@ import assistantRouter from './routes/assistant.js';
 import platformRouter from './routes/platform.js';
 import { resolveDefaultTenant, resolveTenant } from './middleware/tenant.js';
 import pool from './config/database.js';
+import { uploadsPath } from './config/paths.js';
 
 const app = express();
 // Solo se habilita cuando el servidor está detrás de un proxy HTTPS confiable.
-// Así request.protocol conserva https al generar URLs públicas de fotos y QR.
+// Así request.ip es la del cliente (límite de intentos) y request.protocol es https.
 if (process.env.TRUST_PROXY === 'true') app.set('trust proxy', 1);
 app.disable('x-powered-by');
 app.use((_request, response, next) => {
@@ -65,13 +68,13 @@ app.use((request, response, next) => {
 app.use(express.json({ limit: '1mb' }));
 // Solo fotos públicas de profesionales y QR se exponen como archivos estáticos.
 // Los comprobantes se sirven por una ruta autenticada de pagos.
-app.use('/uploads/barbers', express.static(path.resolve(process.cwd(), 'uploads', 'barbers')));
-app.use('/uploads/qr', express.static(path.resolve(process.cwd(), 'uploads', 'qr')));
-app.use('/uploads/brand', express.static(path.resolve(process.cwd(), 'uploads', 'brand')));
+app.use('/uploads/barbers', express.static(uploadsPath('barbers')));
+app.use('/uploads/qr', express.static(uploadsPath('qr')));
+app.use('/uploads/brand', express.static(uploadsPath('brand')));
 // Mantiene visibles QR cargados antes de la separación, sin exponer proofs.
 app.use('/uploads/payments', (request, response, next) => {
   if (!/^\/qr-[\w-]+\.(?:jpe?g|png|webp)$/i.test(request.path)) return next();
-  return express.static(path.resolve(process.cwd(), 'uploads', 'payments'))(request, response, next);
+  return express.static(uploadsPath('payments'))(request, response, next);
 });
 
 // SaaS multiempresa. Todos los módulos de negocio filtran por tenant_id y se
@@ -120,6 +123,7 @@ app.use('/api/platform', platformRouter);
 app.use(TENANT_MODULE_PATHS.map((prefix) => `/api${prefix}`), resolveDefaultTenant);
 app.use('/api', tenantApi);
 
+// Vida del proceso (para el proveedor de hosting): no toca la base.
 app.get('/api/health', (_request, response) => {
   response.json({
     ok: true,
@@ -127,6 +131,62 @@ app.get('/api/health', (_request, response) => {
     timestamp: new Date().toISOString()
   });
 });
+
+// Listo para atender: la base responde y tiene las migraciones SaaS
+// (013, 014 y 015). Úsalo en el monitor de disponibilidad.
+app.get('/api/health/ready', async (_request, response) => {
+  try {
+    await pool.query('SELECT 1');
+    const [rows] = await pool.query(
+      `SELECT
+         (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'tenants') AS hasTenants,
+         (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'appointments' AND column_name = 'tenant_id') AS hasTenantIds,
+         (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'tenant_settings' AND column_name = 'logo_url') AS hasBranding`
+    );
+    const missing = Object.entries({ '013': rows[0].hasTenants, '014': rows[0].hasTenantIds, '015': rows[0].hasBranding })
+      .filter(([, present]) => !Number(present)).map(([migration]) => migration);
+    if (missing.length) return response.status(503).json({ ok: false, database: 'up', missingMigrations: missing });
+    return response.json({ ok: true, database: 'up' });
+  } catch {
+    return response.status(503).json({ ok: false, database: 'down' });
+  }
+});
+
+// Frontend compilado servido por la misma API (un solo servicio en producción).
+// Se activa con SERVE_FRONTEND=true después de `npm run build`. Las rutas
+// /t/:slug, /platform, etc. devuelven index.html (la SPA decide la página).
+const frontendDist = path.resolve(process.env.FRONTEND_DIST || fileURLToPath(new URL('../../frontend/dist', import.meta.url)));
+if (process.env.SERVE_FRONTEND === 'true') {
+  if (!existsSync(path.join(frontendDist, 'index.html'))) {
+    throw new Error(`SERVE_FRONTEND=true pero no existe ${path.join(frontendDist, 'index.html')}. Ejecuta npm run build.`);
+  }
+  // Política de contenido: solo recursos propios, más el mapa de Google
+  // incrustado. Las imágenes pueden venir de cualquier HTTPS (logos, fotos).
+  const contentSecurityPolicy = [
+    "default-src 'self'", "script-src 'self'", "style-src 'self' 'unsafe-inline'", "img-src 'self' data: blob: https:",
+    "font-src 'self' data:", "connect-src 'self'", 'frame-src https://maps.google.com https://www.google.com',
+    "object-src 'none'", "base-uri 'self'", "form-action 'self'", "frame-ancestors 'none'"
+  ].join('; ');
+  const frontendHeaders = (response) => {
+    response.setHeader('Content-Security-Policy', contentSecurityPolicy);
+    response.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=(), payment=()');
+  };
+  // Los archivos con hash en el nombre se cachean un año; index.html nunca,
+  // para que cada despliegue llegue de inmediato.
+  app.use(express.static(frontendDist, {
+    index: false,
+    setHeaders: (response, filePath) => {
+      frontendHeaders(response);
+      response.setHeader('Cache-Control', /[\\/]assets[\\/]/.test(filePath) ? 'public, max-age=31536000, immutable' : 'no-cache');
+    }
+  }));
+  // /assets inexistente → 404 (no la página): evita servir HTML como JavaScript.
+  app.get(/^(?!\/(?:api|uploads|assets)(?:\/|$)).*/, (_request, response) => {
+    frontendHeaders(response);
+    response.setHeader('Cache-Control', 'no-cache');
+    response.sendFile(path.join(frontendDist, 'index.html'));
+  });
+}
 
 app.use(notFound);
 app.use(handleError);

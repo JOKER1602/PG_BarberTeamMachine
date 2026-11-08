@@ -98,7 +98,8 @@ router.post('/multi', requireRole('CLIENTE'), async (request, response, next) =>
     const totalAmount = finalAvailability.services.reduce((total, service) => total + Number(service.price ?? 0), 0);
     const depositAmount = Math.round(totalAmount * 50) / 100;
     const paymentReference = randomUUID();
-    const paymentProofUrl = `${request.protocol}://${request.get('host')}/api/t/${request.tenant.slug}/payments/proofs/${paymentProofId}`;
+    // Ruta relativa a la API protegida (sin dominio): solo la abre la administración de la barbería.
+    const paymentProofUrl = `/api/t/${request.tenant.slug}/payments/proofs/${paymentProofId}`;
     const ids = [];
     let serviceStart = startAt;
     for (const service of finalAvailability.services) {

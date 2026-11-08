@@ -1,0 +1,11 @@
+node_modules
+**/node_modules
+.git
+.claude
+backups
+logs
+backend/uploads
+backend/.env
+**/.env
+frontend/dist
+coverage

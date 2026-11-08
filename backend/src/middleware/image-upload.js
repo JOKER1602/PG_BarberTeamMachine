@@ -2,6 +2,7 @@ import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import multer from 'multer';
+import { uploadsPath } from '../config/paths.js';
 
 const extensionsByMimeType = {
   'image/jpeg': '.jpg',
@@ -10,7 +11,7 @@ const extensionsByMimeType = {
 };
 
 export function createImageUpload({ folder, prefix, label }) {
-  const uploadDirectory = path.resolve(process.cwd(), 'uploads', folder);
+  const uploadDirectory = uploadsPath(folder);
   mkdirSync(uploadDirectory, { recursive: true });
 
   return multer({

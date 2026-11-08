@@ -12,9 +12,17 @@
     "install:all": "npm install",
     "test": "npm run test --workspaces --if-present",
     "test:smoke": "node scripts/smoke-api.mjs",
-    "verify": "npm run test && npm run build --workspace frontend"
+    "verify": "npm run test && npm run build --workspace frontend",
+    "build": "npm run build --workspace frontend",
+    "start": "npm run start --workspace backend",
+    "db:backup": "node scripts/backup-db.mjs",
+    "platform:admin": "node scripts/platform-admin.mjs",
+    "verify:fresh-install": "node scripts/verify-fresh-install.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

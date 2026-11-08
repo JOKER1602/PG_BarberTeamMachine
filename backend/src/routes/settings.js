@@ -3,6 +3,8 @@ import { z } from 'zod';
 import pool from '../config/database.js';
 import { requireAuth } from '../middleware/auth.js';
 import { createImageUpload } from '../middleware/image-upload.js';
+import { uploadLimiter } from '../middleware/rate-limit.js';
+import { publicUploadUrl } from '../config/paths.js';
 import { TENANT_ADMIN_ROLES, requireTenantMembership, tenantIdOf } from '../middleware/tenant.js';
 
 // Aislado por tenant: cada barbería tiene su fila en tenant_settings
@@ -21,11 +23,13 @@ const selectSettings = `SELECT business_name AS businessName, address, city, cou
   hours_text AS hoursText, maps_url AS mapsUrl, instagram_url AS instagramUrl, facebook_url AS facebookUrl, payment_qr_url AS paymentQrUrl,
   logo_url AS logoUrl, cover_url AS coverUrl, description
   FROM tenant_settings WHERE tenant_id = ?`;
+// El QR se guarda como ruta relativa (/uploads/qr/...) o, en datos antiguos, como URL completa.
+const uploadOrUrl = z.string().trim().max(2048).refine((value) => /^\/uploads\/[\w./-]+$/.test(value) || /^https?:\/\//.test(value), 'Dirección de imagen inválida');
 const settingsSchema = z.object({
   businessName: z.string().trim().min(2).max(160), address: z.string().trim().min(2).max(255), city: z.string().trim().min(2).max(120),
   country: z.string().trim().min(2).max(120), phone: z.string().trim().min(6).max(30), whatsapp: z.string().trim().min(6).max(30),
   hoursText: z.string().trim().min(4).max(255), mapsUrl: z.string().url().nullable().optional(), instagramUrl: z.string().url().nullable().optional(),
-  facebookUrl: z.string().url().nullable().optional(), paymentQrUrl: z.string().url().nullable().optional(), description: z.string().trim().max(2000).nullable().optional()
+  facebookUrl: z.string().url().nullable().optional(), paymentQrUrl: uploadOrUrl.nullable().optional(), description: z.string().trim().max(2000).nullable().optional()
 });
 
 router.get('/', async (request, response, next) => {
@@ -51,11 +55,11 @@ router.patch('/', ...requireTenantAdmin, async (request, response, next) => {
   } catch (error) { return next(error); }
 });
 
-router.post('/payment-qr', ...requireTenantAdmin, qrUpload.single('qr'), async (request, response, next) => {
+router.post('/payment-qr', ...requireTenantAdmin, uploadLimiter, qrUpload.single('qr'), async (request, response, next) => {
   if (!request.file) return response.status(400).json({ message: 'Selecciona una imagen JPG, PNG o WEBP de hasta 5 MB.' });
   try {
     const tenantId = tenantIdOf(request);
-    const paymentQrUrl = `${request.protocol}://${request.get('host')}/uploads/qr/${request.file.filename}`;
+    const paymentQrUrl = publicUploadUrl('qr', request.file.filename);
     const [result] = await pool.execute('UPDATE tenant_settings SET payment_qr_url = ? WHERE tenant_id = ?', [paymentQrUrl, tenantId]);
     if (!result.affectedRows) return response.status(409).json({ message: 'Guarda primero los datos del negocio antes de subir el QR.' });
     const [rows] = await pool.execute(selectSettings, [tenantId]);
@@ -63,13 +67,13 @@ router.post('/payment-qr', ...requireTenantAdmin, qrUpload.single('qr'), async (
   } catch (error) { return next(error); }
 });
 
-router.post('/brand-image/:kind', ...requireTenantAdmin, brandUpload.single('image'), async (request, response, next) => {
+router.post('/brand-image/:kind', ...requireTenantAdmin, uploadLimiter, brandUpload.single('image'), async (request, response, next) => {
   const column = brandColumns[request.params.kind];
   if (!column) return response.status(400).json({ message: 'Tipo de imagen inválido: usa logo o portada.' });
   if (!request.file) return response.status(400).json({ message: 'Selecciona una imagen JPG, PNG o WEBP de hasta 5 MB.' });
   try {
     const tenantId = tenantIdOf(request);
-    const imageUrl = `${request.protocol}://${request.get('host')}/uploads/brand/${request.file.filename}`;
+    const imageUrl = publicUploadUrl('brand', request.file.filename);
     const [result] = await pool.execute(`UPDATE tenant_settings SET ${column} = ? WHERE tenant_id = ?`, [imageUrl, tenantId]);
     if (!result.affectedRows) return response.status(409).json({ message: 'Guarda primero los datos del negocio antes de subir la imagen.' });
     const [rows] = await pool.execute(selectSettings, [tenantId]);
