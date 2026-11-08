@@ -20,20 +20,64 @@ export function escapeHtml(value) {
   return String(value ?? '').replace(/[&<>"']/g, (character) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[character]);
 }
 
+// Proveedor de correo, en este orden:
+//   RESEND_API_KEY  → API HTTPS de Resend
+//   BREVO_API_KEY   → API HTTPS de Brevo
+//   EMAIL_HOST...   → SMTP
+// Las API HTTPS funcionan donde el SMTP saliente está bloqueado (Railway lo
+// bloquea en los planes Free, Trial y Hobby). Todas usan EMAIL_FROM como
+// remitente: "Nombre <correo@dominio-verificado>".
+export function emailProvider() {
+  if (process.env.RESEND_API_KEY && process.env.EMAIL_FROM) return 'resend';
+  if (process.env.BREVO_API_KEY && process.env.EMAIL_FROM) return 'brevo';
+  return smtpConfiguration() ? 'smtp' : null;
+}
+
 export function isEmailConfigured() {
-  return Boolean(smtpConfiguration());
+  return Boolean(emailProvider());
+}
+
+export function parseSender(from) {
+  const match = /^\s*"?([^"<]*?)"?\s*<([^>]+)>\s*$/.exec(from ?? '');
+  return match ? { name: match[1].trim() || undefined, email: match[2].trim() } : { email: String(from ?? '').trim() };
+}
+
+async function postJson(url, headers, body, label) {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Accept: 'application/json', ...headers },
+    body: JSON.stringify(body),
+    signal: AbortSignal.timeout(15000)
+  });
+  if (!response.ok) {
+    const detail = await response.json().catch(() => ({}));
+    throw new Error(`${label} rechazó el correo (HTTP ${response.status})${detail?.message ? `: ${detail.message}` : ''}`);
+  }
+}
+
+// Punto único de envío: el resto del código no conoce el proveedor.
+export async function sendEmail({ to, subject, text, html }) {
+  const provider = emailProvider();
+  if (provider === 'resend') {
+    return postJson('https://api.resend.com/emails', { Authorization: `Bearer ${process.env.RESEND_API_KEY}` },
+      { from: process.env.EMAIL_FROM, to: [to], subject, text, html }, 'Resend');
+  }
+  if (provider === 'brevo') {
+    return postJson('https://api.brevo.com/v3/smtp/email', { 'api-key': process.env.BREVO_API_KEY },
+      { sender: parseSender(process.env.EMAIL_FROM), to: [{ email: to }], subject, textContent: text, htmlContent: html }, 'Brevo');
+  }
+  if (provider === 'smtp') {
+    const config = smtpConfiguration();
+    return nodemailer.createTransport(config).sendMail({ from: config.from, to, subject, text, html });
+  }
+  throw new Error('El correo no está configurado');
 }
 
 // La cuenta es global; el correo lleva la marca de la barbería desde la que
 // se pidió el cambio (o PLATFORM_NAME si se pidió fuera de una barbería).
 export async function sendPasswordResetEmail({ to, firstName, resetUrl, brandName }) {
   const brand = brandName || process.env.PLATFORM_NAME || 'Reservas de barbería';
-  const config = smtpConfiguration();
-  if (!config) throw new Error('El correo SMTP no está configurado');
-
-  const transport = nodemailer.createTransport(config);
-  await transport.sendMail({
-    from: config.from,
+  await sendEmail({
     to,
     subject: `Restablece tu contraseña | ${brand}`,
     text: `Hola ${firstName || ''},\n\nSolicitaste restablecer tu contraseña. Usa este enlace dentro de los próximos 30 minutos:\n${resetUrl}\n\nSi no hiciste esta solicitud, puedes ignorar este correo.`,
@@ -48,17 +92,13 @@ export async function sendPasswordResetEmail({ to, firstName, resetUrl, brandNam
 }
 
 export async function sendAppointmentReminderEmail({ to, firstName, appointment, business }) {
-  const config = smtpConfiguration();
-  if (!config) throw new Error('El correo SMTP no está configurado');
-  const transport = nodemailer.createTransport(config);
   const when = new Date(appointment.startsAt).toLocaleString('es-BO', { dateStyle: 'full', timeStyle: 'short', timeZone: 'America/La_Paz' });
   const safe = {
     firstName: escapeHtml(firstName), serviceName: escapeHtml(appointment.serviceName), barberName: escapeHtml(appointment.barberName),
     businessName: escapeHtml(business.businessName), address: escapeHtml(business.address), city: escapeHtml(business.city),
     phone: escapeHtml(business.phone), when: escapeHtml(when)
   };
-  await transport.sendMail({
-    from: config.from,
+  await sendEmail({
     to,
     subject: `Recordatorio de cita | ${business.businessName}`,
     text: `Hola ${firstName}, te recordamos tu cita de ${appointment.serviceName} con ${appointment.barberName} el ${when}. Dirección: ${business.address}, ${business.city}.`,

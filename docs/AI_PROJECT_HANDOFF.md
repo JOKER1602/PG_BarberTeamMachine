@@ -519,6 +519,15 @@ La migración se dividió en dos (ver `database/README.md`):
 
 Ver **[PRODUCTION_LAUNCH.md](PRODUCTION_LAUNCH.md)**: estado, decisiones del negocio, arquitectura (un servicio Node + MySQL 8 administrado + volumen) y puesta en marcha de las 4 primeras barberías. Resuelto en código: límite de intentos (`middleware/rate-limit.js`), `UPLOADS_DIR`, rutas relativas de archivos (migración 016), API sirviendo el frontend (`SERVE_FRONTEND`), CSP, `/api/health/ready`, cierre ordenado, `Dockerfile`, `npm run db:backup`, `npm run verify:fresh-install`, asignación de dueños a barberías existentes (`POST /api/platform/tenants/:slug/owners`) y dependencias sin vulnerabilidades (bcrypt 6, zod 4).
 
+### Despliegue en Railway (8 de noviembre de 2026)
+
+Guía: **[DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)**. Decisiones tomadas tras revisar la documentación de Railway:
+- Sin `railway.json` (Railway lo ignora en servicios nuevos y deja de leerlo el 1/12/2026): pre-deploy `node /app/scripts/migrate.mjs`, healthcheck `/api/health/ready` y volumen `/data` se configuran en el panel.
+- `scripts/migrate.mjs` (`npm run db:migrate`): migraciones pendientes con registro en `schema_migrations`, creación del usuario `DATABASE_USER` con permisos mínimos desde `MIGRATION_DATABASE_URL` (root de Railway) y operadores por `PLATFORM_ADMIN_EMAILS`.
+- Correo por API HTTPS (`RESEND_API_KEY` o `BREVO_API_KEY`, `services/email.js#sendEmail`): Railway bloquea SMTP en Free/Trial/Hobby.
+- `CLIENT_IP_HEADER=x-real-ip` para el límite de intentos (la cantidad de saltos del proxy de Railway no está documentada).
+- `RAILWAY_RUN_UID=0` porque la imagen corre como `node` y el volumen se monta como root.
+
 ### Instrucción breve para la siguiente IA
 
 > Continúa el proyecto Empyrean Studio desde el repositorio local. Es una aplicación React/Vite + Express/MySQL funcional para una barbería, con pagos QR manuales, roles, agenda, recordatorios y analítica. La decisión actual es **no publicar aún**: primero implementar SaaS multiempresa de forma segura. Lee `docs/AI_PROJECT_HANDOFF.md`, luego `docs/MULTITENANCY_ARCHITECTURE.md`, El Incremento 1 está hecho (`backend/src/middleware/tenant.js`, JWT solo con identidad, `database/013_saas_foundation.sql`); sigue el Incremento 2. No ejecutes `database/014_tenant_isolation.sql` hasta que backend y frontend filtren absolutamente todos los datos por `tenant_id`. Conserva los módulos ya funcionales y no expongas secretos ni comprobantes de pago.

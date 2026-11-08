@@ -2,6 +2,8 @@
 
 Revisión: 8 de noviembre de 2026, rama `saas/incremento-2`.
 
+**Proveedor elegido: Railway → seguir [DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)** (pasos exactos, variables y ajustes del panel). Esta guía general explica el porqué y la operación.
+
 Esta guía lleva la plataforma de un entorno local a producción con **4 barberías** (Empyrean Studio + 3). Indica qué ya está resuelto en el código, qué decisiones son del negocio y el orden exacto de puesta en marcha.
 
 ## 1. Estado del código
@@ -21,6 +23,8 @@ Esta guía lleva la plataforma de un entorno local a producción con **4 barber�
 | Despliegue | Un solo servicio Node sirve API y frontend (`SERVE_FRONTEND=true`), `Dockerfile`, cierre ordenado con SIGTERM | Servicio único probado localmente |
 | Salud | `/api/health` (proceso) y `/api/health/ready` (base + migraciones) | Probado |
 | Respaldos | `npm run db:backup` (+ `--con-archivos`) | Respaldo restaurado en una base temporal con los mismos datos |
+| Migraciones | `npm run db:migrate`: aplica solo lo pendiente, registra en `schema_migrations`, crea el usuario de la app y los operadores (`PLATFORM_ADMIN_EMAILS`) | 14/14: base vacía, base existente, base con datos (exige `--confirmar-014`) y repetición |
+| Correo | Resend o Brevo (API HTTPS) o SMTP, elegido por variables | Pruebas con API simulada |
 | Configuración | El servidor no arranca con secretos débiles, MySQL `root`, contraseña vacía o dominio sin HTTPS | Probado |
 
 ### Limitaciones conocidas (aceptables para 4 barberías)
@@ -38,7 +42,7 @@ Esta guía lleva la plataforma de un entorno local a producción con **4 barber�
 1. **Nombre y dominio de la plataforma** (p. ej. `reservas.tudominio.com`). No usar el dominio de una barbería concreta.
 2. **Proveedor de hosting.** Ver sección 3.
 3. **Datos iniciales.** Opción recomendada: **instalación limpia** (la base local tiene datos de prueba). Alternativa: migrar la base local con respaldo y la migración 016.
-4. **Correo transaccional**: proveedor SMTP (Brevo, Amazon SES, Google Workspace…) y dominio con SPF/DKIM.
+4. **Correo transaccional**: **Resend o Brevo por API HTTPS** (`RESEND_API_KEY`/`BREVO_API_KEY`) con dominio verificado (SPF/DKIM). En Railway es obligatorio salvo plan Pro, porque bloquea el SMTP saliente; SMTP sigue disponible en otros proveedores.
 5. **WhatsApp** (opcional al inicio): cuenta de Meta Business verificada, número propio y plantilla aprobada con 5 parámetros (cliente, barbería, servicio, barbero, fecha).
 6. **Textos legales**: términos de uso, política de privacidad y **política de anticipos y devoluciones** (hoy: el anticipo del 50 % no se devuelve si el cliente no asiste). Revisarlos con un profesional según la normativa boliviana.
 7. **Contrato y precio con las barberías** (fase 8 pendiente): mensualidad manual, periodo de prueba (`TRIAL`) y qué pasa al suspender.

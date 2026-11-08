@@ -17,7 +17,8 @@
     "start": "npm run start --workspace backend",
     "db:backup": "node scripts/backup-db.mjs",
     "platform:admin": "node scripts/platform-admin.mjs",
-    "verify:fresh-install": "node scripts/verify-fresh-install.mjs"
+    "verify:fresh-install": "node scripts/verify-fresh-install.mjs",
+    "db:migrate": "node scripts/migrate.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

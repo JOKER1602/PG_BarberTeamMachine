@@ -49,3 +49,18 @@ test('no se puede desactivar en producción', () => {
     if (previous.flag === undefined) delete process.env.RATE_LIMIT_DISABLED; else process.env.RATE_LIMIT_DISABLED = previous.flag;
   }
 });
+
+test('CLIENT_IP_HEADER toma la IP de la cabecera del proxy (p. ej. x-real-ip en Railway)', async () => {
+  const { clientIp } = await import('../src/middleware/rate-limit.js');
+  const previous = process.env.CLIENT_IP_HEADER;
+  const request = { ip: '100.64.0.2', headers: { 'x-real-ip': '181.115.1.20' }, get(name) { return this.headers[name.toLowerCase()]; } };
+  try {
+    delete process.env.CLIENT_IP_HEADER;
+    assert.equal(clientIp(request), '100.64.0.2', 'sin la variable usa request.ip');
+    process.env.CLIENT_IP_HEADER = 'X-Real-IP';
+    assert.equal(clientIp(request), '181.115.1.20');
+    assert.equal(clientIp({ ...request, headers: {} }), '100.64.0.2', 'si falta la cabecera vuelve a request.ip');
+  } finally {
+    if (previous === undefined) delete process.env.CLIENT_IP_HEADER; else process.env.CLIENT_IP_HEADER = previous;
+  }
+});

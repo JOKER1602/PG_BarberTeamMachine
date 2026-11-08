@@ -33,7 +33,9 @@ function assertProductionConfiguration() {
 function warnProductionGaps() {
   if (process.env.NODE_ENV !== 'production') return;
   if (!process.env.UPLOADS_DIR) console.warn('AVISO: UPLOADS_DIR no está definido; fotos, QR y comprobantes se perderán al redeplegar si el disco no es persistente.');
-  if (!process.env.EMAIL_HOST) console.warn('AVISO: el correo SMTP no está configurado; no habrá recuperación de contraseña ni recordatorios por correo.');
+  if (!process.env.RESEND_API_KEY && !process.env.BREVO_API_KEY && !process.env.EMAIL_HOST) {
+    console.warn('AVISO: el correo no está configurado (RESEND_API_KEY, BREVO_API_KEY o SMTP); no habrá recuperación de contraseña ni recordatorios por correo.');
+  }
   if (process.env.TRUST_PROXY !== 'true') console.warn('AVISO: TRUST_PROXY no está activo; detrás de un proxy, el límite de intentos verá la IP del proxy.');
 }
 

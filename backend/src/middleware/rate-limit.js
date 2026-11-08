@@ -9,7 +9,16 @@
 // La IP sale de request.ip: detrás de un proxy HTTPS se debe usar
 // TRUST_PROXY=true para que sea la del cliente y no la del proxy.
 
+// CLIENT_IP_HEADER: cabecera que el proxy de entrada SOBRESCRIBE con la IP real
+// del cliente (en Railway, x-real-ip). Úsala solo si todo el tráfico llega por
+// ese proxy; si no se define, se usa request.ip (TRUST_PROXY).
 export function clientIp(request) {
+  const header = process.env.CLIENT_IP_HEADER?.trim().toLowerCase();
+  if (header) {
+    const value = request.get?.(header) ?? request.headers?.[header];
+    const first = String(value ?? '').split(',')[0].trim();
+    if (first) return first;
+  }
   return request.ip || request.socket?.remoteAddress || 'desconocida';
 }
 

@@ -1,4 +1,7 @@
 # Imagen única: compila el frontend y lo sirve desde la API (SERVE_FRONTEND).
+# Railway la detecta sola. Con un volumen montado, Railway pide RAILWAY_RUN_UID=0
+# porque esta imagen corre como usuario sin privilegios (node). Pre-deploy:
+#   node /app/scripts/migrate.mjs
 # Uso: docker build -t reservas . && docker run --env-file backend/.env -p 3000:3000 -v reservas-uploads:/data/uploads reservas
 FROM node:24-slim AS build
 WORKDIR /app
