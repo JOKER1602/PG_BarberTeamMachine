@@ -5,13 +5,14 @@ import { requireAuth } from '../middleware/auth.js';
 import { requireTenantMembership, tenantIdOf } from '../middleware/tenant.js';
 import { cancelAppointmentReminders } from '../services/reminders.js';
 import { notify } from '../services/notifications.js';
+import { retryOnDeadlock } from '../middleware/retry-deadlock.js';
 
 // Aislado por tenant: el profesional opera solo sus citas en la barbería de la
 // URL, con membresía BARBER activa en ella.
 const router = Router();
 router.use(requireAuth, requireTenantMembership('BARBER'));
 
-router.patch('/appointments/:id/complete', async (request, response, next) => {
+router.patch('/appointments/:id/complete', retryOnDeadlock(async (request, response, next) => {
   const appointmentId = Number(request.params.id);
   if (!Number.isInteger(appointmentId) || appointmentId <= 0) return response.status(400).json({ message: 'Cita inválida' });
 
@@ -41,9 +42,9 @@ router.patch('/appointments/:id/complete', async (request, response, next) => {
     await connection.rollback();
     return next(error);
   } finally { connection.release(); }
-});
+}));
 
-router.patch('/appointments/:id/status', async (request, response, next) => {
+router.patch('/appointments/:id/status', retryOnDeadlock(async (request, response, next) => {
   const id = z.coerce.number().int().positive().safeParse(request.params.id);
   const body = z.object({
     status: z.enum(['NO_SHOW', 'CANCELLED']),
@@ -95,7 +96,7 @@ router.patch('/appointments/:id/status', async (request, response, next) => {
     await connection.rollback();
     return next(error);
   } finally { connection.release(); }
-});
+}));
 
 router.get('/dashboard', async (request, response, next) => {
   const tenantId = tenantIdOf(request);

@@ -9,6 +9,7 @@ import { isSlotAvailable } from '../domain/availability.js';
 import { localDateFilterBounds } from '../config/time.js';
 import { cancelAppointmentReminders, scheduleAppointmentReminders } from '../services/reminders.js';
 import { notify } from '../services/notifications.js';
+import { retryOnDeadlock } from '../middleware/retry-deadlock.js';
 
 // Aislado por tenant: toda cita se lee, crea o modifica dentro de la barbería
 // de la URL (tenantIdOf). Administrar significa ser OWNER/ADMIN de ESA barbería.
@@ -59,7 +60,7 @@ router.get('/availability', async (request, response, next) => {
 
 router.use(requireAuth);
 
-router.post('/multi', requireRole('CLIENTE'), async (request, response, next) => {
+router.post('/multi', requireRole('CLIENTE'), retryOnDeadlock(async (request, response, next) => {
   const parsed = multiBookingSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de las citas invalidos', errors: parsed.error.flatten() });
   const tenantId = tenantIdOf(request);
@@ -126,7 +127,7 @@ router.post('/multi', requireRole('CLIENTE'), async (request, response, next) =>
     await connection.execute('SELECT RELEASE_LOCK(?)', [`barber-team-machine-barber-${request.body?.barberId}`]).catch(() => {});
     connection.release();
   }
-});
+}));
 
 router.get('/mine', requireRole('CLIENTE'), async (request, response, next) => {
   try {
@@ -184,7 +185,7 @@ router.get('/admin', requireTenantAdmin, async (request, response, next) => {
   } catch (error) { return next(error); }
 });
 
-router.patch('/:id/reschedule', loadOptionalTenantMembership, async (request, response, next) => {
+router.patch('/:id/reschedule', loadOptionalTenantMembership, retryOnDeadlock(async (request, response, next) => {
   const id = z.coerce.number().int().positive().safeParse(request.params.id);
   const body = z.object({ startsAt: z.string().datetime({ offset: true }) }).safeParse(request.body);
   if (!id.success || !body.success) {
@@ -199,11 +200,14 @@ router.patch('/:id/reschedule', loadOptionalTenantMembership, async (request, re
     await connection.beginTransaction();
     // El cliente solo reprograma sus citas futuras; el administrador de esta
     // barbería, cualquiera de sus citas confirmadas.
+    // FOR UPDATE es obligatorio: una lectura normal aquí fijaría la "foto" de la
+    // transacción ANTES del candado del barbero y la disponibilidad no vería las
+    // citas guardadas mientras se esperaba el turno (reservas duplicadas).
     const [appointmentRows] = await connection.execute(
       `SELECT id, client_id AS clientId, barber_id AS barberId, service_id AS serviceId, status, payment_reference AS paymentReference
        FROM appointments WHERE id = ? AND tenant_id = ? AND (client_id = ? OR ? = 1)
        AND status = 'CONFIRMED'
-       AND (? = 1 OR starts_at > UTC_TIMESTAMP())`,
+       AND (? = 1 OR starts_at > UTC_TIMESTAMP()) FOR UPDATE`,
       [id.data, tenantId, request.auth.sub, isAdmin, isAdmin]
     );
     if (appointmentRows.length === 0) {
@@ -264,9 +268,9 @@ router.patch('/:id/reschedule', loadOptionalTenantMembership, async (request, re
     if (barberId) await connection.execute('SELECT RELEASE_LOCK(?)', [`barber-team-machine-barber-${barberId}`]).catch(() => {});
     connection.release();
   }
-});
+}));
 
-router.patch('/:id/cancel', loadOptionalTenantMembership, async (request, response, next) => {
+router.patch('/:id/cancel', loadOptionalTenantMembership, retryOnDeadlock(async (request, response, next) => {
   const parsed = z.coerce.number().int().positive().safeParse(request.params.id);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Cita invalida' });
@@ -318,9 +322,9 @@ router.patch('/:id/cancel', loadOptionalTenantMembership, async (request, respon
     await connection.rollback();
     return next(error);
   } finally { connection.release(); }
-});
+}));
 
-router.patch('/:id/status', requireTenantAdmin, async (request, response, next) => {
+router.patch('/:id/status', requireTenantAdmin, retryOnDeadlock(async (request, response, next) => {
   const id = z.coerce.number().int().positive().safeParse(request.params.id);
   const parsed = z.object({ status: z.enum(['CONFIRMED', 'COMPLETED', 'NO_SHOW', 'CANCELLED']), reason: z.string().trim().max(255).optional() }).safeParse(request.body);
   if (!id.success || !parsed.success) return response.status(400).json({ message: 'Cambio de estado invalido' });
@@ -373,7 +377,7 @@ router.patch('/:id/status', requireTenantAdmin, async (request, response, next) 
     await connection.commit();
     return response.json({ message: 'Estado de cita actualizado' });
   } catch (error) { await connection.rollback(); return next(error); } finally { connection.release(); }
-});
+}));
 
 router.patch('/:id/admin-notes', requireTenantAdmin, async (request, response, next) => {
   const id = z.coerce.number().int().positive().safeParse(request.params.id);
