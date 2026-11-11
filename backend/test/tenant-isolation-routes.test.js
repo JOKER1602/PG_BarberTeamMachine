@@ -14,7 +14,6 @@ import paymentsRouter from '../src/routes/payments.js';
 import reviewsRouter from '../src/routes/reviews.js';
 import notificationsRouter from '../src/routes/notifications.js';
 import recommendationsRouter from '../src/routes/recommendations.js';
-import assistantRouter from '../src/routes/assistant.js';
 
 // Guardia estructural del aislamiento multiempresa: cada ruta de cada módulo
 // de negocio se ejecuta con la barbería A y una petición que intenta inyectar
@@ -31,7 +30,7 @@ const futureStart = '2030-03-13T10:00:00-04:00';
 const modules = {
   services: servicesRouter, barbers: barbersRouter, settings: settingsRouter, admin: adminRouter,
   barber: barberPortalRouter, appointments: appointmentsRouter, payments: paymentsRouter, reviews: reviewsRouter,
-  notifications: notificationsRouter, recommendations: recommendationsRouter, assistant: assistantRouter
+  notifications: notificationsRouter, recommendations: recommendationsRouter
 };
 
 const settingsBody = { businessName: 'Barbería A', address: 'Calle 1', city: 'Cochabamba', country: 'Bolivia', phone: '7000000', whatsapp: '7000000', hoursText: 'Lunes a sábado' };
@@ -81,8 +80,7 @@ const routes = [
   ['reviews', 'post', '/', { body: { appointmentId: 10, rating: 5, comment: 'Excelente' } }],
   ['notifications', 'get', '/'],
   ['notifications', 'patch', '/:id/read', { params: { id: '3' } }],
-  ['recommendations', 'get', '/', { query: { serviceIds: '1', days: '1' } }],
-  ['assistant', 'post', '/query', { body: { query: 'corte mañana a las 4 pm' } }]
+  ['recommendations', 'get', '/', { query: { serviceIds: '1', days: '1' } }]
 ];
 
 // Respuestas mínimas de una base simulada para que cada ruta llegue a su

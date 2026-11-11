@@ -15,7 +15,6 @@ import settingsRouter from './routes/settings.js';
 import reviewsRouter from './routes/reviews.js';
 import paymentsRouter from './routes/payments.js';
 import recommendationsRouter from './routes/recommendations.js';
-import assistantRouter from './routes/assistant.js';
 import platformRouter from './routes/platform.js';
 import { resolveDefaultTenant, resolveTenant } from './middleware/tenant.js';
 import pool from './config/database.js';
@@ -91,8 +90,7 @@ const tenantModules = {
   '/payments': paymentsRouter,
   '/reviews': reviewsRouter,
   '/notifications': notificationsRouter,
-  '/recommendations': recommendationsRouter,
-  '/assistant': assistantRouter
+  '/recommendations': recommendationsRouter
 };
 export const TENANT_MODULE_PATHS = Object.freeze(Object.keys(tenantModules));
 const tenantApi = express.Router();

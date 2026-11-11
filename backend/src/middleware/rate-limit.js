@@ -68,4 +68,3 @@ export const passwordResetLimiters = [
 export const resetPasswordLimiter = createRateLimit({ windowMs: 15 * MINUTE, max: 10, key: (request) => `reset:${clientIp(request)}` });
 export const changePasswordLimiter = createRateLimit({ windowMs: 15 * MINUTE, max: 10, key: (request) => `change-password:${request.auth?.sub ?? clientIp(request)}` });
 export const uploadLimiter = createRateLimit({ windowMs: 60 * MINUTE, max: 30, key: (request) => `upload:${request.auth?.sub ?? clientIp(request)}`, message: 'Subiste demasiados archivos. Intenta más tarde.' });
-export const assistantLimiter = createRateLimit({ windowMs: MINUTE, max: 30, key: (request) => `assistant:${clientIp(request)}` });
