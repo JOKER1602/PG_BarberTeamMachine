@@ -3,18 +3,28 @@ import crypto from 'node:crypto';
 import { Router } from 'express';
 import { z } from 'zod';
 import pool from '../config/database.js';
-import { createAccessToken, requireAuth } from '../middleware/auth.js';
+import { clearAuthCookie, requireAuth, setAuthCookie } from '../middleware/auth.js';
 import { isEmailConfigured, sendPasswordResetEmail } from '../services/email.js';
+import { changePasswordLimiter, loginLimiters, passwordResetLimiters, registerLimiter, resetPasswordLimiter } from '../middleware/rate-limit.js';
 
 const router = Router();
+const emailSchema = z.string().email().transform((value) => value.toLowerCase().trim());
+const personNameSchema = z.string().trim().min(2).max(80)
+  .regex(/^[\p{L}]+(?:[ '-][\p{L}]+)*$/u, 'Ingresa solo letras y un espacio, guion o apóstrofe entre nombres');
+const securePasswordSchema = z.string().min(8)
+  .regex(/[a-z]/, 'Incluye una letra minúscula')
+  .regex(/[A-Z]/, 'Incluye una letra mayúscula')
+  .regex(/\d/, 'Incluye al menos un número');
 const credentialsSchema = z.object({
-  email: z.string().email().transform((value) => value.toLowerCase().trim()),
+  email: emailSchema,
   password: z.string().min(8)
 });
-const registrationSchema = credentialsSchema.extend({
-  firstName: z.string().trim().min(2).max(80),
-  lastName: z.string().trim().min(2).max(80),
-  phone: z.string().trim().max(30).optional()
+const registrationSchema = z.object({
+  firstName: personNameSchema,
+  lastName: personNameSchema,
+  phone: z.string().regex(/^[67]\d{7}$/, 'Ingresa un celular boliviano válido de 8 dígitos'),
+  email: emailSchema,
+  password: securePasswordSchema
 });
 
 function publicUser(user) {
@@ -24,11 +34,27 @@ function publicUser(user) {
     lastName: user.last_name,
     email: user.email,
     phone: user.phone,
+    mustChangePassword: Boolean(user.must_change_password),
     role: user.role
   };
 }
 
-router.post('/register', async (request, response, next) => {
+// La sesión incluye las barberías donde la persona es personal, para que el
+// frontend elija el panel correcto en cada /t/:slug. Es solo informativo: la
+// API vuelve a verificar la membresía en cada petición.
+async function sessionUser(user) {
+  const [memberships] = await pool.execute(
+    `SELECT t.slug AS "tenantSlug", t.display_name AS "tenantName", m.role
+     FROM tenant_memberships m JOIN tenants t ON t.id = m.tenant_id
+     WHERE m.user_id = ? AND m.is_active = TRUE AND t.status IN ('TRIAL', 'ACTIVE')
+     ORDER BY t.display_name`,
+    [user.id]
+  );
+  const [platformRows] = await pool.execute('SELECT 1 FROM platform_administrators WHERE user_id = ?', [user.id]);
+  return { ...publicUser(user), memberships, isPlatformAdmin: platformRows.length > 0 };
+}
+
+router.post('/register', registerLimiter, async (request, response, next) => {
   const parsed = registrationSchema.safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Datos de registro invalidos', errors: parsed.error.flatten() });
@@ -44,8 +70,8 @@ router.post('/register', async (request, response, next) => {
     const passwordHash = await bcrypt.hash(password, 12);
     const [result] = await pool.execute(
       `INSERT INTO users (role_id, first_name, last_name, email, phone, password_hash)
-       SELECT id, ?, ?, ?, ?, ? FROM roles WHERE name = 'CLIENTE'`,
-      [firstName, lastName, email, phone ?? null, passwordHash]
+       SELECT id, ?, ?, ?, ?, ? FROM roles WHERE name = 'CLIENTE' RETURNING id`,
+      [firstName, lastName, email, phone, passwordHash]
     );
     const [rows] = await pool.execute(
       `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, r.name AS role
@@ -54,13 +80,14 @@ router.post('/register', async (request, response, next) => {
     );
     const user = rows[0];
 
-    return response.status(201).json({ user: publicUser(user), token: createAccessToken(user) });
+    setAuthCookie(response, user);
+    return response.status(201).json({ user: await sessionUser(user) });
   } catch (error) {
     return next(error);
   }
 });
 
-router.post('/login', async (request, response, next) => {
+router.post('/login', ...loginLimiters, async (request, response, next) => {
   const parsed = credentialsSchema.safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Credenciales invalidas' });
@@ -68,7 +95,7 @@ router.post('/login', async (request, response, next) => {
 
   try {
     const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.password_hash, u.is_active,
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.must_change_password, u.password_hash, u.is_active,
               r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.email = ?`,
       [parsed.data.email]
@@ -80,16 +107,22 @@ router.post('/login', async (request, response, next) => {
       return response.status(401).json({ message: 'Correo o contrasena incorrectos' });
     }
 
-    return response.json({ user: publicUser(user), token: createAccessToken(user) });
+    setAuthCookie(response, user);
+    return response.json({ user: await sessionUser(user) });
   } catch (error) {
     return next(error);
   }
 });
 
+router.post('/logout', (_request, response) => {
+  clearAuthCookie(response);
+  return response.status(204).end();
+});
+
 router.get('/me', requireAuth, async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.is_active, r.name AS role
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.must_change_password, u.is_active, r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`,
       [request.auth.sub]
     );
@@ -98,7 +131,7 @@ router.get('/me', requireAuth, async (request, response, next) => {
       return response.status(401).json({ message: 'Usuario no disponible' });
     }
 
-    return response.json({ user: publicUser(user) });
+    return response.json({ user: await sessionUser(user) });
   } catch (error) {
     return next(error);
   }
@@ -106,59 +139,67 @@ router.get('/me', requireAuth, async (request, response, next) => {
 
 router.patch('/me', requireAuth, async (request, response, next) => {
   const parsed = z.object({
-    firstName: z.string().trim().min(2).max(80),
-    lastName: z.string().trim().min(2).max(80),
+    firstName: personNameSchema,
+    lastName: personNameSchema,
     phone: z.string().trim().max(30).nullable().optional()
   }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de perfil invalidos' });
   try {
-    await pool.execute(
-      'UPDATE users SET first_name = ?, last_name = ?, phone = ? WHERE id = ?',
-      [parsed.data.firstName, parsed.data.lastName, parsed.data.phone ?? null, request.auth.sub]
-    );
+    await pool.execute('UPDATE users SET first_name = ?, last_name = ?, phone = ? WHERE id = ?',
+      [parsed.data.firstName, parsed.data.lastName, parsed.data.phone ?? null, request.auth.sub]);
     const [rows] = await pool.execute(
       `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`, [request.auth.sub]
     );
-    return response.json({ user: publicUser(rows[0]) });
+    return response.json({ user: await sessionUser(rows[0]) });
   } catch (error) { return next(error); }
 });
 
-router.patch('/me/password', requireAuth, async (request, response, next) => {
-  const parsed = z.object({ currentPassword: z.string().min(8), password: z.string().min(8) }).safeParse(request.body);
+router.patch('/me/password', requireAuth, changePasswordLimiter, async (request, response, next) => {
+  const parsed = z.object({ currentPassword: z.string().min(8), password: securePasswordSchema }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de contrasena invalidos' });
   try {
     const [rows] = await pool.execute('SELECT password_hash FROM users WHERE id = ?', [request.auth.sub]);
     if (!rows[0] || !(await bcrypt.compare(parsed.data.currentPassword, rows[0].password_hash))) {
       return response.status(400).json({ message: 'La contrasena actual no es correcta' });
     }
-    await pool.execute('UPDATE users SET password_hash = ? WHERE id = ?', [await bcrypt.hash(parsed.data.password, 12), request.auth.sub]);
+    await pool.execute('UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?', [await bcrypt.hash(parsed.data.password, 12), request.auth.sub]);
     return response.json({ message: 'Contrasena actualizada correctamente' });
   } catch (error) { return next(error); }
 });
 
-router.post('/forgot-password', async (request, response, next) => {
-  const parsed = z.object({ email: z.string().email() }).safeParse(request.body);
+router.post('/forgot-password', ...passwordResetLimiters, async (request, response, next) => {
+  const parsed = z.object({ email: z.string().email(), tenantSlug: z.string().max(80).optional() }).safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Correo invalido' });
   }
+  // Barbería desde la que se pidió el cambio: da la marca del correo y el
+  // enlace de vuelta. Si no existe o no está activa, se usa la marca general.
+  const [brandRows] = parsed.data.tenantSlug
+    ? await pool.execute(
+      `SELECT t.slug, COALESCE(ts.business_name, t.display_name) AS "brandName"
+       FROM tenants t LEFT JOIN tenant_settings ts ON ts.tenant_id = t.id
+       WHERE t.slug = ? AND t.status IN ('TRIAL', 'ACTIVE')`, [parsed.data.tenantSlug]).catch(() => [[]])
+    : [[]];
+  const brand = brandRows[0];
 
   try {
     if (!isEmailConfigured()) {
       return response.status(503).json({ message: 'El servicio de correo aún no está configurado. Contacta a la barbería.' });
     }
 
-    const [rows] = await pool.execute('SELECT id, first_name AS firstName, email FROM users WHERE email = ? AND is_active = TRUE', [parsed.data.email.toLowerCase()]);
+    const [rows] = await pool.execute('SELECT id, first_name AS "firstName", email FROM users WHERE email = ? AND is_active = TRUE', [parsed.data.email.toLowerCase()]);
     if (rows.length > 0) {
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
-      const frontendUrl = (process.env.FRONTEND_URL ?? 'http://localhost:5173').replace(/\/$/, '');
-      const resetUrl = `${frontendUrl}/recuperar-contrasena?token=${rawToken}`;
+      // FRONTEND_URL admite varios orígenes (CORS); el enlace usa el primero.
+      const frontendUrl = ((process.env.FRONTEND_URL ?? '').split(',')[0].trim() || 'http://localhost:5173').replace(/\/$/, '');
+      const resetUrl = `${frontendUrl}/recuperar-contrasena?token=${rawToken}${brand ? `&t=${brand.slug}` : ''}`;
 
-      await pool.execute('UPDATE password_reset_tokens SET used_at = UTC_TIMESTAMP() WHERE user_id = ? AND used_at IS NULL', [rows[0].id]);
-      await pool.execute('INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 MINUTE))', [rows[0].id, tokenHash]);
+      await pool.execute('UPDATE password_reset_tokens SET used_at = now() WHERE user_id = ? AND used_at IS NULL', [rows[0].id]);
+      await pool.execute(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, now() + interval '30 minutes')`, [rows[0].id, tokenHash]);
       try {
-        await sendPasswordResetEmail({ to: rows[0].email, firstName: rows[0].firstName, resetUrl });
+        await sendPasswordResetEmail({ to: rows[0].email, firstName: rows[0].firstName, resetUrl, brandName: brand?.brandName });
       } catch (emailError) {
         await pool.execute('DELETE FROM password_reset_tokens WHERE token_hash = ?', [tokenHash]);
         return response.status(502).json({ message: 'No se pudo enviar el correo de recuperación. Intenta nuevamente más tarde.' });
@@ -171,10 +212,10 @@ router.post('/forgot-password', async (request, response, next) => {
   }
 });
 
-router.post('/reset-password', async (request, response, next) => {
+router.post('/reset-password', resetPasswordLimiter, async (request, response, next) => {
   const parsed = z.object({
     token: z.string().length(64),
-    password: z.string().min(8)
+    password: securePasswordSchema
   }).safeParse(request.body);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Datos de recuperacion invalidos' });
@@ -184,7 +225,7 @@ router.post('/reset-password', async (request, response, next) => {
     const tokenHash = crypto.createHash('sha256').update(parsed.data.token).digest('hex');
     const [rows] = await pool.execute(
       `SELECT user_id FROM password_reset_tokens
-       WHERE token_hash = ? AND used_at IS NULL AND expires_at > UTC_TIMESTAMP()`,
+       WHERE token_hash = ? AND used_at IS NULL AND expires_at > now()`,
       [tokenHash]
     );
     if (rows.length === 0) {
@@ -192,8 +233,8 @@ router.post('/reset-password', async (request, response, next) => {
     }
 
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
-    await pool.execute('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash, rows[0].user_id]);
-    await pool.execute('UPDATE password_reset_tokens SET used_at = UTC_TIMESTAMP() WHERE token_hash = ?', [tokenHash]);
+    await pool.execute('UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?', [passwordHash, rows[0].user_id]);
+    await pool.execute('UPDATE password_reset_tokens SET used_at = now() WHERE token_hash = ?', [tokenHash]);
     return response.json({ message: 'Contrasena actualizada correctamente' });
   } catch (error) {
     return next(error);

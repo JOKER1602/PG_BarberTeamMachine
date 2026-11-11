@@ -1,3 +1,5 @@
+import { zonedParts } from '../config/time.js';
+
 export function overlaps(startA, endA, startB, endB) {
   return new Date(startA) < new Date(endB) && new Date(endA) > new Date(startB);
 }
@@ -14,7 +16,10 @@ export function isWithinWorkingHours(startAt, endAt, workingHours) {
   ));
 }
 
-export function isSlotAvailable({ startAt, endAt, workingHours, blocks, appointments }) {
+export function isSlotAvailable({ startAt, endAt, workingHours, blocks, appointments, now = new Date() }) {
+  if (new Date(startAt) <= new Date(now)) {
+    return { available: false, reason: 'No se puede reservar un horario que ya pasó' };
+  }
   if (!isWithinWorkingHours(startAt, endAt, workingHours)) {
     return { available: false, reason: 'Fuera del horario laboral' };
   }
@@ -27,4 +32,3 @@ export function isSlotAvailable({ startAt, endAt, workingHours, blocks, appointm
 
   return { available: true };
 }
-import { zonedParts } from '../config/time.js';

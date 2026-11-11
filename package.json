@@ -2,7 +2,7 @@
   "name": "barber-team-machine",
   "version": "0.1.0",
   "private": true,
-  "description": "Sistema web inteligente para la gestion de Barber Team Machine",
+  "description": "Sistema web inteligente para la gestión de reservas de Empyrean Studio",
   "workspaces": [
     "backend",
     "frontend"
@@ -10,9 +10,23 @@
   "scripts": {
     "dev": "concurrently \"npm run dev --workspace backend\" \"npm run dev --workspace frontend\"",
     "install:all": "npm install",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "test:smoke": "node scripts/smoke-api.mjs",
+    "verify": "npm run test && npm run build --workspace frontend",
+    "build": "npm run build --workspace frontend",
+    "start": "npm run start --workspace backend",
+    "db:backup": "node scripts/backup-db.mjs",
+    "platform:admin": "node scripts/platform-admin.mjs",
+    "verify:fresh-install": "node scripts/verify-fresh-install.mjs",
+    "db:migrate": "node scripts/migrate.mjs",
+    "test:routes": "node tests/integration/all-routes.mjs",
+    "test:stress": "node tests/performance/stress-barberias.mjs",
+    "db:import-mysql": "node scripts/mysql-to-postgres.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20"
   }
 }

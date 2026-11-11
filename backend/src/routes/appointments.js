@@ -1,17 +1,21 @@
 import { Router } from 'express';
+import { randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import pool from '../config/database.js';
-import { isSlotAvailable } from '../domain/availability.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
-import { barberDayRange, zonedParts } from '../config/time.js';
+import { TENANT_ADMIN_ROLES, isTenantAdmin, loadOptionalTenantMembership, requireTenantMembership, tenantIdOf } from '../middleware/tenant.js';
+import { findAvailableSlotsForDate, loadActiveAppointments, loadAvailability, loadMultiAvailability, sqlDateTime } from '../services/appointment-availability.js';
+import { BarberQueueTimeout, withBarberQueue } from '../services/barber-queue.js';
+import { isSlotAvailable } from '../domain/availability.js';
+import { localDateFilterBounds } from '../config/time.js';
 import { cancelAppointmentReminders, scheduleAppointmentReminders } from '../services/reminders.js';
+import { notify } from '../services/notifications.js';
+import { retryOnDeadlock } from '../middleware/retry-deadlock.js';
 
+// Aislado por tenant: toda cita se lee, crea o modifica dentro de la barbería
+// de la URL (tenantIdOf). Administrar significa ser OWNER/ADMIN de ESA barbería.
 const router = Router();
-const bookingSchema = z.object({
-  barberId: z.coerce.number().int().positive(),
-  serviceId: z.coerce.number().int().positive(),
-  startsAt: z.string().datetime({ offset: true })
-});
+const requireTenantAdmin = requireTenantMembership(...TENANT_ADMIN_ROLES);
 const availabilitySchema = z.object({
   barberId: z.coerce.number().int().positive(),
   serviceId: z.coerce.number().int().positive().optional(),
@@ -22,63 +26,26 @@ const multiBookingSchema = z.object({
   barberId: z.coerce.number().int().positive(),
   serviceIds: z.array(z.coerce.number().int().positive()).min(1).max(10),
   startsAt: z.string().datetime({ offset: true }),
-  clientNotes: z.string().trim().max(1500).nullable().optional()
+  paymentProofId: z.string().uuid()
 });
-const activeStatuses = ['PENDING', 'CONFIRMED'];
-
-function sqlDateTime(date) {
-  return date.toISOString().slice(0, 19).replace('T', ' ');
-}
-
-async function loadAvailability(connection, barberId, serviceId, startAt, endAt) {
-  const weekday = zonedParts(startAt).weekday;
-  const [serviceRows] = await connection.execute(
-    `SELECT s.id, s.duration_minutes AS durationMinutes
-     FROM services s JOIN barber_services bs ON bs.service_id = s.id
-     WHERE s.id = ? AND s.is_active = TRUE AND bs.barber_id = ?`,
-    [serviceId, barberId]
-  );
-  if (serviceRows.length === 0) {
-    return { service: null, workingHours: [], blocks: [], appointments: [] };
+// Candado por barbero para que dos reservas no ocupen el mismo horario. Es de
+// transacción: se libera solo al confirmar o deshacer, también si la conexión
+// se corta. Los id de barbero son únicos en toda la base, así que no mezcla
+// barberías. Ninguna espera de candado de la transacción pasa de 10 s; si no lo
+// obtiene responde que reintenten. Dentro de una misma instancia casi nunca
+// espera: la fila en memoria (withBarberQueue) ya ordena las peticiones.
+async function acquireBarberLock(connection, barberId) {
+  try {
+    await connection.execute("SET LOCAL lock_timeout = '10s'");
+    await connection.execute('SELECT pg_advisory_xact_lock(hashtext(?))', [`barber-team-machine-barber-${barberId}`]);
+    return true;
+  } catch (error) {
+    if (error.code === '55P03') return false; // lock_timeout: la ruta hace rollback y responde 409
+    throw error;
   }
-
-  const [workingHours] = await connection.execute(
-    `SELECT weekday, TIME_TO_SEC(start_time) DIV 60 AS start_minutes,
-            TIME_TO_SEC(end_time) DIV 60 AS end_minutes
-     FROM barber_working_hours
-     WHERE barber_id = ? AND weekday = ? AND is_active = TRUE`,
-    [barberId, weekday]
-  );
-  const [blocks] = await connection.execute(
-    `SELECT starts_at, ends_at FROM schedule_blocks
-     WHERE barber_id = ? AND starts_at < ? AND ends_at > ?`,
-    [barberId, sqlDateTime(endAt), sqlDateTime(startAt)]
-  );
-  const [appointments] = await connection.execute(
-    `SELECT id, starts_at, ends_at FROM appointments
-     WHERE barber_id = ? AND status IN (?, ?) AND starts_at < ? AND ends_at > ?`,
-    [barberId, ...activeStatuses, sqlDateTime(endAt), sqlDateTime(startAt)]
-  );
-
-  return { service: serviceRows[0], workingHours, blocks, appointments };
 }
 
-async function loadMultiAvailability(connection, barberId, serviceIds, startAt, endAt) {
-  const uniqueServiceIds = [...new Set(serviceIds)];
-  const base = await loadAvailability(connection, barberId, uniqueServiceIds[0], startAt, endAt);
-  if (!base.service) return { ...base, services: null, durationMinutes: 0 };
-  const placeholders = uniqueServiceIds.map(() => '?').join(', ');
-  const [services] = await connection.execute(
-    `SELECT s.id, s.duration_minutes AS durationMinutes
-     FROM services s JOIN barber_services bs ON bs.service_id = s.id
-     WHERE s.id IN (${placeholders}) AND s.is_active = TRUE AND bs.barber_id = ?`,
-    [...uniqueServiceIds, barberId]
-  );
-  if (services.length !== uniqueServiceIds.length) return { ...base, services: null, durationMinutes: 0 };
-  const byId = new Map(services.map((service) => [String(service.id), service]));
-  const orderedServices = uniqueServiceIds.map((id) => byId.get(String(id)));
-  return { ...base, services: orderedServices, durationMinutes: orderedServices.reduce((total, service) => total + service.durationMinutes, 0) };
-}
+const busyResponse = (response) => response.status(409).json({ message: 'La disponibilidad se está actualizando. Intenta nuevamente.' });
 
 router.get('/availability', async (request, response, next) => {
   const parsed = availabilitySchema.safeParse(request.query);
@@ -91,22 +58,10 @@ router.get('/availability', async (request, response, next) => {
     const serviceIds = parsed.data.serviceIds ? parsed.data.serviceIds.split(',').map(Number) : [parsed.data.serviceId];
     const connection = await pool.getConnection();
     try {
-      const { start: dayStart, end: dayEnd } = barberDayRange(date);
-      const availability = await loadMultiAvailability(connection, barberId, serviceIds, dayStart, dayEnd);
-      if (!availability.services) {
+      const slots = await findAvailableSlotsForDate(connection, { tenantId: tenantIdOf(request), barberId, serviceIds, date });
+      if (!slots) {
         return response.status(404).json({ message: 'El barbero no realiza todos los servicios seleccionados' });
       }
-
-      const slots = [];
-      for (let minute = 0; minute < 24 * 60; minute += 15) {
-        const startAt = new Date(dayStart.getTime() + minute * 60_000);
-        const endAt = new Date(startAt.getTime() + availability.durationMinutes * 60_000);
-        const result = isSlotAvailable({ ...availability, startAt, endAt });
-        if (result.available) {
-          slots.push({ startsAt: startAt.toISOString(), endsAt: endAt.toISOString() });
-        }
-      }
-
       return response.json({ slots });
     } finally {
       connection.release();
@@ -118,119 +73,109 @@ router.get('/availability', async (request, response, next) => {
 
 router.use(requireAuth);
 
-router.post('/multi', async (request, response, next) => {
+router.post('/multi', requireRole('CLIENTE'), retryOnDeadlock(async (request, response, next) => {
   const parsed = multiBookingSchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de las citas invalidos', errors: parsed.error.flatten() });
-  const connection = await pool.getConnection();
+  const tenantId = tenantIdOf(request);
+  const { barberId, startsAt, paymentProofId } = parsed.data;
+  const serviceIds = [...new Set(parsed.data.serviceIds)];
+  const startAt = new Date(startsAt);
+  const invalidProof = () => response.status(400).json({ message: 'El comprobante no existe, no te pertenece o ya fue utilizado.' });
   try {
-    const { barberId, startsAt, clientNotes } = parsed.data;
-    const serviceIds = [...new Set(parsed.data.serviceIds)];
-    const startAt = new Date(startsAt);
-    await connection.beginTransaction();
-    await connection.execute('SELECT GET_LOCK(?, 10)', [`barber-team-machine-barber-${barberId}`]);
+    // 1. Validaciones sin turno ni transacción: no ocupan una conexión mientras
+    //    otras reservas esperan, y quien ya perdió el horario se entera al instante.
+    const [proofRows] = await pool.execute(
+      'SELECT id FROM payment_proofs WHERE id = ? AND tenant_id = ? AND client_id = ? AND used_at IS NULL',
+      [paymentProofId, tenantId, request.auth.sub]
+    );
+    if (!proofRows.length) return invalidProof();
     const optimisticEndAt = new Date(startAt.getTime() + 24 * 60 * 60_000);
-    const availability = await loadMultiAvailability(connection, barberId, serviceIds, startAt, optimisticEndAt);
-    if (!availability.services) {
-      await connection.rollback();
-      return response.status(400).json({ message: 'El barbero no realiza todos los servicios seleccionados' });
-    }
+    const availability = await loadMultiAvailability(pool, tenantId, barberId, serviceIds, startAt, optimisticEndAt);
+    if (!availability.services) return response.status(400).json({ message: 'El barbero no realiza todos los servicios seleccionados' });
     const endAt = new Date(startAt.getTime() + availability.durationMinutes * 60_000);
-    const finalAvailability = await loadMultiAvailability(connection, barberId, serviceIds, startAt, endAt);
-    const result = isSlotAvailable({ ...finalAvailability, startAt, endAt });
-    if (!result.available) {
-      await connection.rollback();
-      return response.status(409).json({ message: `Horario no disponible: ${result.reason}` });
-    }
-    const ids = [];
-    let serviceStart = startAt;
-    for (const service of finalAvailability.services) {
-      const serviceEnd = new Date(serviceStart.getTime() + service.durationMinutes * 60_000);
-      const [created] = await connection.execute(
-        `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, client_notes, updated_by) VALUES (?, ?, ?, ?, ?, 'PENDING', ?, ?)`,
-        [request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), clientNotes ?? null, request.auth.sub]
-      );
-      ids.push(created.insertId);
-      serviceStart = serviceEnd;
-    }
-    await connection.execute(
-      `INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, 'APPOINTMENT_CREATED', 'Solicitud de reserva recibida', ?)`,
-      [request.auth.sub, ids[0], `Tu solicitud para ${finalAvailability.services.length} servicio(s) fue registrada y esta pendiente de confirmacion`]
-    );
-    await connection.commit();
-    return response.status(201).json({ ids, status: 'PENDING' });
+    const precheck = isSlotAvailable({ ...availability, startAt, endAt });
+    if (!precheck.available) return response.status(409).json({ message: `Horario no disponible: ${precheck.reason}` });
+
+    const totalAmount = availability.services.reduce((total, service) => total + Number(service.price ?? 0), 0);
+    const depositAmount = Math.round(totalAmount * 50) / 100;
+    const paymentReference = randomUUID();
+    // Ruta relativa a la API protegida (sin dominio): solo la abre la administración de la barbería.
+    const paymentProofUrl = `/api/t/${request.tenant.slug}/payments/proofs/${paymentProofId}`;
+
+    // 2. Con el turno del barbero: solo lo que necesita estar protegido.
+    return await withBarberQueue(barberId, async () => {
+      const connection = await pool.getConnection();
+      try {
+        await connection.beginTransaction();
+        if (!await acquireBarberLock(connection, barberId)) {
+          await connection.rollback();
+          return busyResponse(response);
+        }
+        // Reclama el comprobante: si otra reserva lo usó primero, no queda fila.
+        const [claimed] = await connection.execute(
+          'UPDATE payment_proofs SET used_at = now() WHERE id = ? AND tenant_id = ? AND client_id = ? AND used_at IS NULL RETURNING id',
+          [paymentProofId, tenantId, request.auth.sub]
+        );
+        if (!claimed.affectedRows) {
+          await connection.rollback();
+          return invalidProof();
+        }
+        const appointments = await loadActiveAppointments(connection, tenantId, barberId, startAt, endAt);
+        const result = isSlotAvailable({ ...availability, appointments, startAt, endAt });
+        if (!result.available) {
+          await connection.rollback();
+          return response.status(409).json({ message: `Horario no disponible: ${result.reason}` });
+        }
+        // Todos los servicios en un solo INSERT, encadenados desde el inicio.
+        const rows = [];
+        let serviceStart = startAt;
+        for (const service of availability.services) {
+          const serviceEnd = new Date(serviceStart.getTime() + service.durationMinutes * 60_000);
+          rows.push([tenantId, request.auth.sub, barberId, service.id, sqlDateTime(serviceStart), sqlDateTime(serviceEnd), paymentReference, paymentProofUrl, depositAmount, request.auth.sub]);
+          serviceStart = serviceEnd;
+        }
+        const [created] = await connection.execute(
+          `INSERT INTO appointments (tenant_id, client_id, barber_id, service_id, starts_at, ends_at, status, payment_reference, payment_proof_url, payment_amount, updated_by)
+           VALUES ${rows.map(() => "(?, ?, ?, ?, ?, ?, 'PENDING', ?, ?, ?, ?)").join(', ')} RETURNING id`,
+          rows.flat()
+        );
+        const ids = created.rows.map((row) => row.id);
+        await notify(connection, {
+          tenantId, userId: request.auth.sub, appointmentId: ids[0], type: 'PAYMENT_PENDING', title: 'Anticipo en revisión',
+          message: `Recibimos tu comprobante de anticipo por Bs ${depositAmount.toFixed(2)}. Confirmaremos tu cita cuando el pago sea revisado.`
+        });
+        await connection.commit();
+        return response.status(201).json({ ids, paymentReference, status: 'PENDING' });
+      } catch (error) {
+        await connection.rollback();
+        throw error;
+      } finally {
+        connection.release();
+      }
+    });
   } catch (error) {
-    await connection.rollback();
+    if (error instanceof BarberQueueTimeout) return busyResponse(response);
     return next(error);
-  } finally {
-    await connection.execute('SELECT RELEASE_LOCK(?)', [`barber-team-machine-barber-${request.body?.barberId}`]).catch(() => {});
-    connection.release();
   }
-});
+}));
 
-router.post('/', async (request, response, next) => {
-  const parsed = bookingSchema.safeParse(request.body);
-  if (!parsed.success) {
-    return response.status(400).json({ message: 'Datos de la cita invalidos', errors: parsed.error.flatten() });
-  }
-
-  const connection = await pool.getConnection();
+router.get('/mine', requireRole('CLIENTE'), async (request, response, next) => {
   try {
-    const { barberId, serviceId, startsAt } = parsed.data;
-    const startAt = new Date(startsAt);
-    await connection.beginTransaction();
-    await connection.execute('SELECT GET_LOCK(?, 10)', [`barber-team-machine-barber-${barberId}`]);
-
-    const [serviceRows] = await connection.execute(
-      `SELECT s.id, s.duration_minutes AS durationMinutes
-       FROM services s JOIN barber_services bs ON bs.service_id = s.id
-       WHERE s.id = ? AND s.is_active = TRUE AND bs.barber_id = ?`,
-      [serviceId, barberId]
-    );
-    if (serviceRows.length === 0) {
-      await connection.rollback();
-      return response.status(400).json({ message: 'El barbero no realiza este servicio' });
-    }
-
-    const endAt = new Date(startAt.getTime() + serviceRows[0].durationMinutes * 60_000);
-    const availability = await loadAvailability(connection, barberId, serviceId, startAt, endAt);
-    const result = isSlotAvailable({ ...availability, startAt, endAt });
-    if (!result.available) {
-      await connection.rollback();
-      return response.status(409).json({ message: `Horario no disponible: ${result.reason}` });
-    }
-
-    const [appointmentResult] = await connection.execute(
-      `INSERT INTO appointments (client_id, barber_id, service_id, starts_at, ends_at, status, updated_by)
-       VALUES (?, ?, ?, ?, ?, 'PENDING', ?)`,
-      [request.auth.sub, barberId, serviceId, sqlDateTime(startAt), sqlDateTime(endAt), request.auth.sub]
-    );
-    await connection.execute(
-      `INSERT INTO notifications (user_id, appointment_id, type, title, message)
-       VALUES (?, ?, 'APPOINTMENT_CREATED', 'Solicitud de reserva recibida', 'Tu solicitud de cita fue registrada y esta pendiente de confirmacion')`,
-      [request.auth.sub, appointmentResult.insertId]
-    );
-    await connection.commit();
-    return response.status(201).json({ id: appointmentResult.insertId, status: 'PENDING' });
-  } catch (error) {
-    await connection.rollback();
-    return next(error);
-  } finally {
-    await connection.execute('SELECT RELEASE_LOCK(?)', [`barber-team-machine-barber-${request.body?.barberId}`]).catch(() => {});
-    connection.release();
-  }
-});
-
-router.get('/mine', async (request, response, next) => {
-  try {
+    // El historial del cliente en ESTA barbería; sus citas en otras no se ven.
     const [rows] = await pool.execute(
-            `SELECT a.id, a.barber_id AS barberId, a.service_id AS serviceId,
-              a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.client_notes AS clientNotes, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt,
-              s.name AS serviceName, s.price AS price, b.display_name AS barberName, b.photo_url AS barberPhotoUrl
+      `SELECT a.id, a.barber_id AS "barberId", a.service_id AS "serviceId",
+              a.starts_at AS "startsAt", a.ends_at AS "endsAt", a.status, a.cancellation_reason AS "cancellationReason", a.payment_reference AS "paymentReference", a.payment_amount AS "paymentAmount", a.cancelled_at AS "cancelledAt", a.completed_at AS "completedAt",
+              s.name AS "serviceName", s.price AS price,
+              COALESCE((SELECT SUM(s2.price) FROM appointments a2 JOIN services s2 ON s2.id = a2.service_id AND s2.tenant_id = a2.tenant_id
+                        WHERE a2.tenant_id = a.tenant_id AND a2.client_id = a.client_id AND a2.payment_reference = a.payment_reference), s.price) AS "bookingTotal",
+              b.display_name AS "barberName", b.photo_url AS "barberPhotoUrl",
+              r.id AS "reviewId", r.rating AS "reviewRating"
        FROM appointments a
-       JOIN services s ON s.id = a.service_id
-       JOIN barbers b ON b.id = a.barber_id
-       WHERE a.client_id = ? ORDER BY a.starts_at DESC`,
-      [request.auth.sub]
+       JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
+       JOIN barbers b ON b.id = a.barber_id AND b.tenant_id = a.tenant_id
+       LEFT JOIN reviews r ON r.appointment_id = a.id AND r.tenant_id = a.tenant_id
+       WHERE a.tenant_id = ? AND a.client_id = ? ORDER BY a.starts_at DESC`,
+      [tenantIdOf(request), request.auth.sub]
     );
     return response.json({ appointments: rows });
   } catch (error) {
@@ -238,7 +183,7 @@ router.get('/mine', async (request, response, next) => {
   }
 });
 
-router.get('/admin', requireRole('ADMINISTRADOR'), async (request, response, next) => {
+router.get('/admin', requireTenantAdmin, async (request, response, next) => {
   const filters = z.object({
     dateFrom: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
     dateTo: z.string().regex(/^\d{4}-\d{2}-\d{2}$/).optional(),
@@ -247,41 +192,71 @@ router.get('/admin', requireRole('ADMINISTRADOR'), async (request, response, nex
     status: z.enum(['PENDING', 'CONFIRMED', 'COMPLETED', 'CANCELLED', 'NO_SHOW']).optional()
   }).safeParse(request.query);
   if (!filters.success) return response.status(400).json({ message: 'Filtros invalidos' });
-  const clauses = []; const values = [];
-  if (filters.data.dateFrom) { clauses.push('a.starts_at >= ?'); values.push(`${filters.data.dateFrom} 00:00:00`); }
-  if (filters.data.dateTo) { clauses.push('a.starts_at < DATE_ADD(?, INTERVAL 1 DAY)'); values.push(filters.data.dateTo); }
+  const clauses = ['a.tenant_id = ?']; const values = [tenantIdOf(request)];
+  const bounds = localDateFilterBounds(filters.data);
+  if (bounds.from) { clauses.push('a.starts_at >= ?'); values.push(bounds.from); }
+  if (bounds.toExclusive) { clauses.push('a.starts_at < ?'); values.push(bounds.toExclusive); }
   for (const [key, column] of [['barberId', 'a.barber_id'], ['serviceId', 'a.service_id'], ['status', 'a.status']]) if (filters.data[key]) { clauses.push(`${column} = ?`); values.push(filters.data[key]); }
   try {
     const [rows] = await pool.execute(
-      `SELECT a.id, a.client_id AS clientId, a.barber_id AS barberId, a.service_id AS serviceId,
-       a.starts_at AS startsAt, a.ends_at AS endsAt, a.status, a.cancellation_reason AS cancellationReason,
-       a.client_notes AS clientNotes, a.admin_notes AS adminNotes, a.cancelled_at AS cancelledAt, a.completed_at AS completedAt, a.updated_by AS updatedBy,
-       s.name AS serviceName, b.display_name AS barberName,
-       CONCAT(u.first_name, ' ', u.last_name) AS clientName
-       FROM appointments a JOIN services s ON s.id = a.service_id JOIN barbers b ON b.id = a.barber_id
-       JOIN users u ON u.id = a.client_id ${clauses.length ? `WHERE ${clauses.join(' AND ')}` : ''}
+      `SELECT a.id, a.client_id AS "clientId", a.barber_id AS "barberId", a.service_id AS "serviceId",
+       a.starts_at AS "startsAt", a.ends_at AS "endsAt", a.status, a.cancellation_reason AS "cancellationReason", a.payment_reference AS "paymentReference", a.payment_proof_url AS "paymentProofUrl", a.payment_amount AS "paymentAmount",
+       a.admin_notes AS "adminNotes", a.cancelled_at AS "cancelledAt", a.completed_at AS "completedAt", a.updated_by AS "updatedBy",
+       s.name AS "serviceName", b.display_name AS "barberName",
+       CONCAT(u.first_name, ' ', u.last_name) AS "clientName"
+       FROM appointments a
+       JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
+       JOIN barbers b ON b.id = a.barber_id AND b.tenant_id = a.tenant_id
+       JOIN users u ON u.id = a.client_id
+       WHERE ${clauses.join(' AND ')}
        ORDER BY a.starts_at DESC LIMIT 500`, values
     );
     return response.json({ appointments: rows });
   } catch (error) { return next(error); }
 });
 
-router.patch('/:id/reschedule', async (request, response, next) => {
+router.patch('/:id/reschedule', loadOptionalTenantMembership, retryOnDeadlock(async (request, response, next) => {
   const id = z.coerce.number().int().positive().safeParse(request.params.id);
   const body = z.object({ startsAt: z.string().datetime({ offset: true }) }).safeParse(request.body);
   if (!id.success || !body.success) {
     return response.status(400).json({ message: 'Datos de reprogramacion invalidos' });
   }
 
+  const tenantId = tenantIdOf(request);
+  const isAdmin = isTenantAdmin(request) ? 1 : 0;
+  // El barbero se conoce antes de pedir conexión: la espera de turno no ocupa una.
+  let queuedBarber;
+  try {
+    const [owner] = await pool.execute('SELECT barber_id AS "barberId" FROM appointments WHERE id = ? AND tenant_id = ?', [id.data, tenantId]);
+    if (!owner.length) return response.status(404).json({ message: 'Cita no encontrada o no reprogramable' });
+    queuedBarber = owner[0].barberId;
+  } catch (error) {
+    return next(error);
+  }
+  try {
+    return await withBarberQueue(queuedBarber, () => rescheduleWithTurn({ request, response, next, id: id.data, startsAt: body.data.startsAt, tenantId, isAdmin }));
+  } catch (error) {
+    if (error instanceof BarberQueueTimeout) return busyResponse(response);
+    return next(error);
+  }
+}));
+
+async function rescheduleWithTurn({ request, response, next, id: appointmentId, startsAt, tenantId, isAdmin }) {
+  const id = { data: appointmentId };
+  const body = { data: { startsAt } };
   const connection = await pool.getConnection();
   let barberId;
   try {
     await connection.beginTransaction();
+    // El cliente solo reprograma sus citas futuras; el administrador de esta
+    // barbería, cualquiera de sus citas confirmadas.
+    // FOR UPDATE: dos peticiones sobre la misma cita se ejecutan una tras otra.
     const [appointmentRows] = await connection.execute(
-      `SELECT id, client_id AS clientId, barber_id AS barberId, service_id AS serviceId
-       FROM appointments WHERE id = ? AND (client_id = ? OR ? = 'ADMINISTRADOR')
-       AND status IN ('PENDING', 'CONFIRMED')`,
-      [id.data, request.auth.sub, request.auth.role]
+      `SELECT id, client_id AS "clientId", barber_id AS "barberId", service_id AS "serviceId", status, payment_reference AS "paymentReference"
+       FROM appointments WHERE id = ? AND tenant_id = ? AND (client_id = ? OR ? = 1)
+       AND status = 'CONFIRMED'
+       AND (? = 1 OR starts_at > now()) FOR UPDATE`,
+      [id.data, tenantId, request.auth.sub, isAdmin, isAdmin]
     );
     if (appointmentRows.length === 0) {
       await connection.rollback();
@@ -289,44 +264,60 @@ router.patch('/:id/reschedule', async (request, response, next) => {
     }
 
     ({ barberId } = appointmentRows[0]);
-    await connection.execute('SELECT GET_LOCK(?, 10)', [`barber-team-machine-barber-${barberId}`]);
+    if (!await acquireBarberLock(connection, barberId)) {
+      await connection.rollback();
+      return response.status(409).json({ message: 'La disponibilidad se está actualizando. Intenta nuevamente.' });
+    }
+    // Una reserva de varios servicios se mueve completa: los servicios se
+    // encadenan desde el nuevo inicio, en el mismo orden que tenían.
+    const { clientId, paymentReference } = appointmentRows[0];
+    const [bookingRows] = await connection.execute(
+      `SELECT a.id, a.service_id AS "serviceId", s.duration_minutes AS "durationMinutes"
+       FROM appointments a JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
+       WHERE a.tenant_id = ? AND ${paymentReference ? 'a.payment_reference = ? AND a.client_id = ? AND a.barber_id = ? AND a.status = \'CONFIRMED\'' : 'a.id = ?'}
+       ORDER BY a.starts_at, a.id FOR UPDATE OF a`,
+      paymentReference ? [tenantId, paymentReference, clientId, barberId] : [tenantId, id.data]
+    );
+    const bookingIds = bookingRows.map((row) => row.id);
     const startAt = new Date(body.data.startsAt);
-    const [serviceRows] = await connection.execute('SELECT duration_minutes AS durationMinutes FROM services WHERE id = ?', [appointmentRows[0].serviceId]);
-    const endAt = new Date(startAt.getTime() + serviceRows[0].durationMinutes * 60_000);
-    const availability = await loadAvailability(connection, barberId, appointmentRows[0].serviceId, startAt, endAt);
+    const totalMinutes = bookingRows.reduce((total, row) => total + row.durationMinutes, 0);
+    const endAt = new Date(startAt.getTime() + totalMinutes * 60_000);
+    const availability = await loadAvailability(connection, tenantId, barberId, bookingRows[0].serviceId, startAt, endAt);
     const result = isSlotAvailable({
       ...availability,
       startAt,
       endAt,
-      appointments: availability.appointments.filter((appointment) => appointment.id !== id.data)
+      appointments: availability.appointments.filter((appointment) => !bookingIds.includes(appointment.id))
     });
     if (!result.available) {
       await connection.rollback();
       return response.status(409).json({ message: `Nuevo horario no disponible: ${result.reason}` });
     }
 
-    await connection.execute(
-      `UPDATE appointments SET starts_at = ?, ends_at = ?, status = 'PENDING', updated_by = ? WHERE id = ?`,
-      [sqlDateTime(startAt), sqlDateTime(endAt), request.auth.sub, id.data]
-    );
-    await cancelAppointmentReminders(connection, id.data);
-    await connection.execute(
-      `INSERT INTO notifications (user_id, appointment_id, type, title, message)
-       VALUES (?, ?, 'APPOINTMENT_RESCHEDULED', 'Solicitud reprogramada', 'Tu nueva fecha esta pendiente de confirmacion')`,
-      [appointmentRows[0].clientId, id.data]
-    );
+    const nextStatus = 'CONFIRMED';
+    let serviceStart = startAt;
+    for (const row of bookingRows) {
+      const serviceEnd = new Date(serviceStart.getTime() + row.durationMinutes * 60_000);
+      await connection.execute(
+        'UPDATE appointments SET starts_at = ?, ends_at = ?, status = ?, updated_by = ? WHERE id = ? AND tenant_id = ?',
+        [sqlDateTime(serviceStart), sqlDateTime(serviceEnd), nextStatus, request.auth.sub, row.id, tenantId]
+      );
+      await cancelAppointmentReminders(connection, row.id, tenantId);
+      await scheduleAppointmentReminders(connection, row.id, tenantId);
+      serviceStart = serviceEnd;
+    }
+    await notify(connection, { tenantId, userId: clientId, appointmentId: bookingIds[0], type: 'APPOINTMENT_RESCHEDULED', title: 'Cita reprogramada', message: 'Tu nueva fecha quedó confirmada.' });
     await connection.commit();
-    return response.json({ message: 'Solicitud de reprogramacion registrada', status: 'PENDING' });
+    return response.json({ message: bookingIds.length > 1 ? 'Reserva reprogramada y confirmada' : 'Cita reprogramada y confirmada', status: nextStatus, rescheduledIds: bookingIds });
   } catch (error) {
     await connection.rollback();
     return next(error);
   } finally {
-    if (barberId) await connection.execute('SELECT RELEASE_LOCK(?)', [`barber-team-machine-barber-${barberId}`]).catch(() => {});
     connection.release();
   }
-});
+}
 
-router.patch('/:id/cancel', async (request, response, next) => {
+router.patch('/:id/cancel', loadOptionalTenantMembership, retryOnDeadlock(async (request, response, next) => {
   const parsed = z.coerce.number().int().positive().safeParse(request.params.id);
   if (!parsed.success) {
     return response.status(400).json({ message: 'Cita invalida' });
@@ -334,65 +325,117 @@ router.patch('/:id/cancel', async (request, response, next) => {
 
   const body = z.object({ reason: z.string().trim().max(255).optional() }).safeParse(request.body ?? {});
   if (!body.success) return response.status(400).json({ message: 'Motivo de cancelacion invalido' });
+  const tenantId = tenantIdOf(request);
+  const isAdmin = isTenantAdmin(request) ? 1 : 0;
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    const [result] = await connection.execute(
-      `UPDATE appointments SET status = 'CANCELLED', cancellation_reason = ?, cancelled_at = UTC_TIMESTAMP(), updated_by = ?
-       WHERE id = ? AND (client_id = ? OR ? = 'ADMINISTRADOR') AND status IN ('PENDING', 'CONFIRMED')`,
-      [body.data.reason ?? null, request.auth.sub, parsed.data, request.auth.sub, request.auth.role]
+    const [appointmentRows] = await connection.execute(
+      `SELECT client_id AS "clientId", payment_reference AS "paymentReference"
+       FROM appointments WHERE id = ? AND tenant_id = ? AND (client_id = ? OR ? = 1)
+       AND status IN ('PENDING', 'CONFIRMED')
+       AND (? = 1 OR starts_at > now()) FOR UPDATE`,
+      [parsed.data, tenantId, request.auth.sub, isAdmin, isAdmin]
     );
-    if (result.affectedRows === 0) {
+    if (!appointmentRows.length) {
       await connection.rollback();
       return response.status(404).json({ message: 'Cita no encontrada o no cancelable' });
     }
-    await cancelAppointmentReminders(connection, parsed.data);
-    const [appointments] = await connection.execute('SELECT client_id FROM appointments WHERE id = ?', [parsed.data]);
-    await connection.execute(
-      `INSERT INTO notifications (user_id, appointment_id, type, title, message)
-       VALUES (?, ?, 'APPOINTMENT_CANCELLED', 'Cita cancelada', 'Tu cita fue cancelada')`, [appointments[0].client_id, parsed.data]
+    const appointment = appointmentRows[0];
+    // Una reserva con anticipo agrupa varios servicios bajo payment_reference.
+    // Se cancela completa, tanto si el anticipo sigue en revisión como si ya
+    // fue confirmada; solo se excluyen citas ya atendidas, canceladas o pasadas.
+    const [cancellable] = await connection.execute(
+      appointment.paymentReference
+        ? `SELECT id FROM appointments
+           WHERE tenant_id = ? AND payment_reference = ? AND client_id = ? AND status IN ('PENDING', 'CONFIRMED')
+           AND (? = 1 OR starts_at > now()) FOR UPDATE`
+        : 'SELECT id FROM appointments WHERE tenant_id = ? AND id = ?',
+      appointment.paymentReference
+        ? [tenantId, appointment.paymentReference, appointment.clientId, isAdmin]
+        : [tenantId, parsed.data]
     );
+    const cancelledIds = cancellable.map((row) => row.id);
+    await connection.execute(
+      `UPDATE appointments SET status = 'CANCELLED', cancellation_reason = ?, cancelled_at = now(), updated_by = ?
+       WHERE tenant_id = ? AND id IN (${cancelledIds.map(() => '?').join(', ')})`,
+      [body.data.reason ?? null, request.auth.sub, tenantId, ...cancelledIds]
+    );
+    for (const cancelledId of cancelledIds) await cancelAppointmentReminders(connection, cancelledId, tenantId);
+    await notify(connection, { tenantId, userId: appointment.clientId, appointmentId: parsed.data, type: 'APPOINTMENT_CANCELLED', title: 'Cita cancelada', message: 'Tu cita fue cancelada' });
     await connection.commit();
-    return response.json({ message: 'Cita cancelada' });
+    return response.json({ message: cancelledIds.length > 1 ? 'Reserva cancelada' : 'Cita cancelada', cancelledIds });
   } catch (error) {
     await connection.rollback();
     return next(error);
   } finally { connection.release(); }
-});
+}));
 
-router.patch('/:id/status', requireRole('ADMINISTRADOR'), async (request, response, next) => {
+router.patch('/:id/status', requireTenantAdmin, retryOnDeadlock(async (request, response, next) => {
   const id = z.coerce.number().int().positive().safeParse(request.params.id);
   const parsed = z.object({ status: z.enum(['CONFIRMED', 'COMPLETED', 'NO_SHOW', 'CANCELLED']), reason: z.string().trim().max(255).optional() }).safeParse(request.body);
   if (!id.success || !parsed.success) return response.status(400).json({ message: 'Cambio de estado invalido' });
+  const tenantId = tenantIdOf(request);
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    const [rows] = await connection.execute("SELECT client_id FROM appointments WHERE id = ? AND status IN ('PENDING', 'CONFIRMED')", [id.data]);
+    const [rows] = await connection.execute(
+      `SELECT client_id AS "clientId", status, payment_reference AS "paymentReference" FROM appointments WHERE id = ? AND tenant_id = ? AND status IN ('PENDING', 'CONFIRMED')`,
+      [id.data, tenantId]
+    );
     if (!rows.length) { await connection.rollback(); return response.status(404).json({ message: 'Cita no encontrada o no actualizable' }); }
+    if (rows[0].status === 'PENDING' && rows[0].paymentReference && !['CONFIRMED', 'CANCELLED'].includes(parsed.data.status)) {
+      await connection.rollback();
+      return response.status(400).json({ message: 'Primero aprueba o rechaza el anticipo antes de cambiar esta cita.' });
+    }
+    const isPaymentDecision = rows[0].status === 'PENDING' && rows[0].paymentReference && ['CONFIRMED', 'CANCELLED'].includes(parsed.data.status);
+    const groupCondition = isPaymentDecision ? 'payment_reference = ? AND status = \'PENDING\'' : 'id = ?';
+    const groupValue = isPaymentDecision ? rows[0].paymentReference : id.data;
     await connection.execute(
       `UPDATE appointments
        SET status = ?, cancellation_reason = ?,
-           cancelled_at = CASE WHEN ? = 'CANCELLED' THEN UTC_TIMESTAMP() ELSE cancelled_at END,
-           completed_at = CASE WHEN ? = 'COMPLETED' THEN UTC_TIMESTAMP() ELSE completed_at END,
+           cancelled_at = CASE WHEN ? = 'CANCELLED' THEN now() ELSE cancelled_at END,
+           completed_at = CASE WHEN ? = 'COMPLETED' THEN now() ELSE completed_at END,
            updated_by = ?
-       WHERE id = ?`,
-      [parsed.data.status, parsed.data.status === 'CANCELLED' ? parsed.data.reason ?? null : null, parsed.data.status, parsed.data.status, request.auth.sub, id.data]
+       WHERE tenant_id = ? AND ${groupCondition}`,
+      [parsed.data.status, parsed.data.status === 'CANCELLED' ? parsed.data.reason ?? null : null, parsed.data.status, parsed.data.status, request.auth.sub, tenantId, groupValue]
     );
-    if (parsed.data.status === 'CONFIRMED') await scheduleAppointmentReminders(connection, id.data);
-    if (['CANCELLED', 'COMPLETED', 'NO_SHOW'].includes(parsed.data.status)) await cancelAppointmentReminders(connection, id.data);
-    const messages = { CONFIRMED: ['Cita confirmada', 'Tu cita fue confirmada'], COMPLETED: ['Cita atendida', 'Tu cita fue marcada como atendida'], NO_SHOW: ['Inasistencia registrada', 'Tu cita fue marcada como no asistida'], CANCELLED: ['Cita cancelada', 'Tu cita fue cancelada'] };
-    await connection.execute('INSERT INTO notifications (user_id, appointment_id, type, title, message) VALUES (?, ?, ?, ?, ?)', [rows[0].client_id, id.data, `APPOINTMENT_${parsed.data.status}`, messages[parsed.data.status][0], messages[parsed.data.status][1]]);
+    // Volver a confirmar una reserva ya aprobada no repite avisos ni recordatorios.
+    if (parsed.data.status === 'CONFIRMED' && (isPaymentDecision || !rows[0].paymentReference)) {
+      const [confirmed] = await connection.execute(
+        `SELECT id, client_id AS "clientId" FROM appointments WHERE tenant_id = ? AND ${isPaymentDecision ? 'payment_reference = ?' : 'id = ?'}`,
+        [tenantId, groupValue]
+      );
+      for (const appointment of confirmed) {
+        await scheduleAppointmentReminders(connection, appointment.id, tenantId);
+        await notify(connection, { tenantId, userId: appointment.clientId, appointmentId: appointment.id, type: 'APPOINTMENT_CONFIRMED', title: 'Pago aprobado · cita confirmada', message: 'Tu pago fue aprobado y tu cita quedó confirmada.' });
+      }
+    }
+    if (['CANCELLED', 'COMPLETED', 'NO_SHOW'].includes(parsed.data.status)) {
+      const [affectedAppointments] = await connection.execute(
+        `SELECT id FROM appointments WHERE tenant_id = ? AND ${isPaymentDecision ? 'payment_reference = ?' : 'id = ?'}`,
+        [tenantId, groupValue]
+      );
+      for (const appointment of affectedAppointments) await cancelAppointmentReminders(connection, appointment.id, tenantId);
+    }
+    const messages = { COMPLETED: ['Cita atendida', 'Tu cita fue marcada como atendida'], NO_SHOW: ['Inasistencia registrada', 'Tu cita fue marcada como no asistida'], CANCELLED: ['Cita cancelada', 'Tu cita fue cancelada'] };
+    if (parsed.data.status !== 'CONFIRMED') {
+      await notify(connection, { tenantId, userId: rows[0].clientId, appointmentId: id.data, type: `APPOINTMENT_${parsed.data.status}`, title: messages[parsed.data.status][0], message: messages[parsed.data.status][1] });
+    }
     await connection.commit();
     return response.json({ message: 'Estado de cita actualizado' });
   } catch (error) { await connection.rollback(); return next(error); } finally { connection.release(); }
-});
+}));
 
-router.patch('/:id/admin-notes', requireRole('ADMINISTRADOR'), async (request, response, next) => {
+router.patch('/:id/admin-notes', requireTenantAdmin, async (request, response, next) => {
   const id = z.coerce.number().int().positive().safeParse(request.params.id);
   const parsed = z.object({ adminNotes: z.string().trim().max(1500).nullable() }).safeParse(request.body);
   if (!id.success || !parsed.success) return response.status(400).json({ message: 'Nota interna inválida' });
   try {
-    const [result] = await pool.execute('UPDATE appointments SET admin_notes = ?, updated_by = ? WHERE id = ?', [parsed.data.adminNotes, request.auth.sub, id.data]);
+    const [result] = await pool.execute(
+      'UPDATE appointments SET admin_notes = ?, updated_by = ? WHERE id = ? AND tenant_id = ?',
+      [parsed.data.adminNotes, request.auth.sub, id.data, tenantIdOf(request)]
+    );
     if (!result.affectedRows) return response.status(404).json({ message: 'Cita no encontrada' });
     return response.json({ message: 'Nota interna guardada' });
   } catch (error) { return next(error); }

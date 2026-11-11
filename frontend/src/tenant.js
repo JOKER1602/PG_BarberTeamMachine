@@ -1,0 +1,115 @@
+// Contexto de barbería (tenant) en el frontend.
+//
+// Cada barbería vive en /t/:slug/... (por ejemplo /t/empyrean-studio/reservar).
+// El slug de la URL es la única fuente: el cliente HTTP lo antepone a las
+// llamadas de negocio y los enlaces internos se construyen con tenantHref.
+// La API vuelve a validar el slug y la membresía en cada petición.
+
+export const DEFAULT_TENANT_SLUG = import.meta.env?.VITE_DEFAULT_TENANT_SLUG ?? 'empyrean-studio';
+
+// Igual que la validación del backend y la base: minúsculas, números y guiones internos.
+const TENANT_PATH = /^\/t\/([a-z0-9](?:[a-z0-9-]{0,78}[a-z0-9])?)(\/.*)?$/;
+
+// Rutas globales: no pertenecen a una barbería (el enlace del correo de
+// recuperación de contraseña apunta aquí).
+// /platform es el panel de los operadores del SaaS (no es de ninguna barbería).
+const GLOBAL_PATHS = Object.freeze(['/recuperar-contrasena', '/platform']);
+
+export function parseTenantPath(pathname) {
+  const match = TENANT_PATH.exec(pathname ?? '');
+  if (!match) return null;
+  const path = (match[2] ?? '/').replace(/\/+$/, '') || '/';
+  return { slug: match[1], path };
+}
+
+export function currentTenantSlug() {
+  const location = globalThis.window?.location;
+  const fromPath = parseTenantPath(location?.pathname)?.slug;
+  if (fromPath) return fromPath;
+  // En una ruta global (recuperar contraseña) la barbería de origen viaja como
+  // ?t=slug para conservar su marca y volver a ella.
+  if (GLOBAL_PATHS.includes(location?.pathname)) {
+    const fromQuery = new URLSearchParams(location?.search ?? '').get('t');
+    if (fromQuery && parseTenantPath(`/t/${fromQuery}`)) return fromQuery;
+  }
+  return DEFAULT_TENANT_SLUG;
+}
+
+// Enlace a la recuperación de contraseña que recuerda la barbería de origen.
+export function passwordRecoveryHref() {
+  return `/recuperar-contrasena?t=${currentTenantSlug()}`;
+}
+
+// Convierte una ruta interna ('/reservar', '/?login=1', '/#ubicacion') en la
+// ruta de la barbería actual. Las rutas globales no se tocan.
+export function tenantHref(target, slug = currentTenantSlug()) {
+  const value = String(target ?? '/');
+  if (!value.startsWith('/') || value.startsWith('/t/')) return value;
+  const [, path = '/', rest = ''] = /^([^?#]*)(.*)$/.exec(value);
+  if (GLOBAL_PATHS.includes(path)) return value;
+  return `/t/${slug}${path === '/' ? '' : path}${rest}`;
+}
+
+// Ruta antigua sin slug → misma ruta en la barbería por defecto, conservando
+// consulta y ancla, para que los enlaces y marcadores previos sigan funcionando.
+export function legacyRedirectTarget({ pathname, search = '', hash = '' }) {
+  if (parseTenantPath(pathname) || GLOBAL_PATHS.includes(pathname)) return null;
+  return tenantHref(`${pathname}${search}${hash}`, DEFAULT_TENANT_SLUG);
+}
+
+// --- Marca de la barbería ---------------------------------------------------
+// Se carga una vez por página (App.jsx, con GET /api/t/:slug) antes de mostrar
+// la barbería, así todas las páginas leen nombre, ciudad, logo y portada sin
+// volver a pedirlos. Nunca se muestra la marca de otra barbería por defecto.
+let currentBrand = null;
+
+export function setTenantBrand({ tenant, brand } = {}) {
+  currentBrand = {
+    slug: tenant?.slug ?? currentTenantSlug(),
+    name: brand?.name || tenant?.displayName || 'Barbería',
+    city: brand?.city || '',
+    logoUrl: brand?.logoUrl || null,
+    coverUrl: brand?.coverUrl || null
+  };
+  if (globalThis.document) globalThis.document.title = currentBrand.name;
+  return currentBrand;
+}
+
+export function tenantBrand() {
+  return currentBrand ?? { slug: currentTenantSlug(), name: 'Barbería', city: '', logoUrl: null, coverUrl: null };
+}
+
+// "Empyrean Studio" → { first: 'EMPYREAN', rest: 'STUDIO' } para el logotipo de
+// dos tonos; un nombre de una sola palabra queda sin segunda parte.
+export function brandWords(name = tenantBrand().name) {
+  const [first = '', ...rest] = String(name).trim().toLocaleUpperCase('es').split(/\s+/);
+  return { first, rest: rest.join(' ') };
+}
+
+// Iniciales para los monogramas ("Empyrean Studio" → "ES").
+export function brandInitials(name = tenantBrand().name) {
+  return String(name).trim().split(/\s+/).slice(0, 2).map((word) => word[0] ?? '').join('').toLocaleUpperCase('es') || 'B';
+}
+
+const TENANT_ADMIN_ROLES = ['OWNER', 'ADMIN'];
+
+// Rol efectivo de la persona en ESTA barbería, con los nombres que ya usan las
+// páginas: personal según su membresía; si no es personal, cliente solo si su
+// cuenta es de cliente (la API exige ese rol para reservar).
+export function accessRoleFor(user, slug = currentTenantSlug()) {
+  if (!user) return null;
+  const membership = (user.memberships ?? []).find((item) => item.tenantSlug === slug);
+  if (membership && TENANT_ADMIN_ROLES.includes(membership.role)) return 'ADMINISTRADOR';
+  if (membership?.role === 'BARBER') return 'BARBERO';
+  const globalRole = user.globalRole ?? user.role;
+  return globalRole === 'CLIENTE' ? 'CLIENTE' : 'SIN_ACCESO';
+}
+
+// Devuelve el usuario con `role` = rol efectivo en la barbería actual y el rol
+// de la cuenta guardado en `globalRole`. Así las páginas siguen comparando
+// role === 'ADMINISTRADOR' | 'BARBERO' | 'CLIENTE' sin conocer los tenants.
+export function withTenantRole(user, slug = currentTenantSlug()) {
+  if (!user) return user;
+  const globalRole = user.globalRole ?? user.role;
+  return { ...user, globalRole, role: accessRoleFor({ ...user, globalRole }, slug) };
+}
