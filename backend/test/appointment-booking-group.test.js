@@ -68,7 +68,7 @@ async function withConnection(connection, callback) {
 
 test('el cliente cancela completa una reserva confirmada de varios servicios', async () => {
   const connection = fakeConnection((sql) => {
-    if (sql.includes('SELECT client_id AS clientId, payment_reference')) return [{ clientId: 5, paymentReference: 'ref-1' }];
+    if (sql.includes('SELECT client_id AS "clientId", payment_reference')) return [{ clientId: 5, paymentReference: 'ref-1' }];
     if (sql.includes('SELECT id FROM appointments') && sql.includes('payment_reference = ?')) return [{ id: 10 }, { id: 11 }];
     return undefined;
   });
@@ -90,11 +90,10 @@ test('reprogramar mueve todos los servicios de la reserva en cadena', async () =
   const newStart = '2030-03-13T10:00:00-04:00';
   const weekday = zonedParts(newStart).weekday;
   const connection = fakeConnection((sql) => {
-    if (sql.includes('SELECT id, client_id AS clientId, barber_id AS barberId')) {
+    if (sql.includes('SELECT id, client_id AS "clientId", barber_id AS "barberId"')) {
       return [{ id: 10, clientId: 5, barberId: 2, serviceId: 1, status: 'CONFIRMED', paymentReference: 'ref-1' }];
     }
-    if (sql.includes('GET_LOCK')) return [{ acquired: 1 }];
-    if (sql.includes('s.duration_minutes AS durationMinutes') && sql.includes('a.payment_reference = ?')) {
+        if (sql.includes('s.duration_minutes AS "durationMinutes"') && sql.includes('a.payment_reference = ?')) {
       return [{ id: 10, serviceId: 1, durationMinutes: 30 }, { id: 11, serviceId: 3, durationMinutes: 20 }];
     }
     if (sql.includes('JOIN barber_services bs')) return [{ id: 1, durationMinutes: 30, price: 50 }];
@@ -117,8 +116,8 @@ test('reprogramar mueve todos los servicios de la reserva en cadena', async () =
   assert.deepEqual(result.body.rescheduledIds, [10, 11]);
   const updates = connection.calls.filter((call) => call.sql.includes('UPDATE appointments SET starts_at'));
   assert.deepEqual(updates.map((call) => call.values), [
-    ['2030-03-13 14:00:00', '2030-03-13 14:30:00', 'CONFIRMED', '5', 10, TENANT_ID],
-    ['2030-03-13 14:30:00', '2030-03-13 14:50:00', 'CONFIRMED', '5', 11, TENANT_ID]
+    ['2030-03-13T14:00:00.000Z', '2030-03-13T14:30:00.000Z', 'CONFIRMED', '5', 10, TENANT_ID],
+    ['2030-03-13T14:30:00.000Z', '2030-03-13T14:50:00.000Z', 'CONFIRMED', '5', 11, TENANT_ID]
   ]);
 });
 
@@ -126,11 +125,10 @@ test('reprogramar rechaza el horario si otra cita ajena ocupa la cadena completa
   const newStart = '2030-03-13T10:00:00-04:00';
   const weekday = zonedParts(newStart).weekday;
   const connection = fakeConnection((sql) => {
-    if (sql.includes('SELECT id, client_id AS clientId, barber_id AS barberId')) {
+    if (sql.includes('SELECT id, client_id AS "clientId", barber_id AS "barberId"')) {
       return [{ id: 10, clientId: 5, barberId: 2, serviceId: 1, status: 'CONFIRMED', paymentReference: 'ref-1' }];
     }
-    if (sql.includes('GET_LOCK')) return [{ acquired: 1 }];
-    if (sql.includes('s.duration_minutes AS durationMinutes') && sql.includes('a.payment_reference = ?')) {
+        if (sql.includes('s.duration_minutes AS "durationMinutes"') && sql.includes('a.payment_reference = ?')) {
       return [{ id: 10, serviceId: 1, durationMinutes: 30 }, { id: 11, serviceId: 3, durationMinutes: 20 }];
     }
     if (sql.includes('JOIN barber_services bs')) return [{ id: 1, durationMinutes: 30, price: 50 }];

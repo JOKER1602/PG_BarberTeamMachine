@@ -71,7 +71,7 @@ export function requireAuth(request, response, next) {
   // activa y se usa el rol vigente en la base, para que desactivar un usuario
   // o cambiar su rol tenga efecto inmediato y no al vencer la cookie.
   return pool.execute(
-    'SELECT u.is_active AS isActive, r.name AS role FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?',
+    'SELECT u.is_active AS "isActive", r.name AS role FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?',
     [request.auth.sub]
   ).then(([rows]) => {
     if (!rows[0]?.isActive) {

@@ -58,7 +58,7 @@ function dashboardRowsFor(sql) {
     }];
   }
   if (sql.includes('GROUP BY s.id, s.name')) return [{ name: 'Corte normal', total: 3 }];
-  if (sql.includes("'%H:00') AS label")) return [{ label: '10:00', total: 2 }];
+  if (sql.includes("'HH24:00') AS label")) return [{ label: '10:00', total: 2 }];
   if (sql.includes('GROUP BY a.status')) return [{ status: 'COMPLETED', total: 2 }];
   if (sql.includes('latest_days')) return [{ date: '2026-10-10', total: 2, completed: 1 }];
   if (sql.includes('GROUP BY b.id, b.display_name')) return [{ id: 2, name: 'Andy', total: 4, completed: 2, noShow: 0, revenue: 210, occupiedMinutes: 180 }];
@@ -98,12 +98,12 @@ test('el dashboard aplica filtros, protege los datos y no necesita una base real
     assert.deepEqual(body.barberPerformance, [{ id: 2, name: 'Andy', total: 4, completed: 2, noShow: 0, revenue: 210, occupiedMinutes: 180 }]);
     assert.equal(calls.length, 7);
     // Horas y días se agrupan en hora local, no en UTC.
-    const localGrouping = calls.filter((call) => call.sql.includes("'%H:00') AS label") || call.sql.includes('latest_days'));
+    const localGrouping = calls.filter((call) => call.sql.includes("'HH24:00') AS label") || call.sql.includes('latest_days'));
     assert.equal(localGrouping.length, 2);
-    for (const call of localGrouping) assert.ok(call.sql.includes("CONVERT_TZ(a.starts_at, '+00:00', '-04:00')"));
+    for (const call of localGrouping) assert.ok(call.sql.includes("(a.starts_at AT TIME ZONE 'America/La_Paz')"));
 
     // Días de Cochabamba (UTC-4): del 1 de octubre 00:00 local al 1 de noviembre 00:00 local.
-    const filterValues = [TENANT_ID, '2026-10-01 04:00:00', '2026-11-01 04:00:00', 2, 3];
+    const filterValues = [TENANT_ID, '2026-10-01T04:00:00.000Z', '2026-11-01T04:00:00.000Z', 2, 3];
     assert.deepEqual(calls[0].values, [...filterValues, ...filterValues]);
     for (const call of calls.slice(1)) assert.deepEqual(call.values, filterValues);
     for (const call of calls) {

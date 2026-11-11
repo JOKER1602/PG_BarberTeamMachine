@@ -106,7 +106,7 @@ app.get('/api/t/:tenantSlug', resolveTenant, async (request, response, next) => 
   try {
     const { id, slug, displayName } = request.tenant;
     const [rows] = await pool.execute(
-      'SELECT business_name AS businessName, city, logo_url AS logoUrl, cover_url AS coverUrl FROM tenant_settings WHERE tenant_id = ?',
+      'SELECT business_name AS "businessName", city, logo_url AS "logoUrl", cover_url AS "coverUrl" FROM tenant_settings WHERE tenant_id = ?',
       [id]
     );
     const settings = rows[0] ?? {};
@@ -132,18 +132,18 @@ app.get('/api/health', (_request, response) => {
   });
 });
 
-// Listo para atender: la base responde y tiene las migraciones SaaS
-// (013, 014 y 015). Úsalo en el monitor de disponibilidad.
+// Listo para atender: la base responde y tiene el esquema aplicado.
+// Úsalo en el monitor de disponibilidad.
 app.get('/api/health/ready', async (_request, response) => {
   try {
     await pool.query('SELECT 1');
     const [rows] = await pool.query(
       `SELECT
-         (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() AND table_name = 'tenants') AS hasTenants,
-         (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'appointments' AND column_name = 'tenant_id') AS hasTenantIds,
-         (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'tenant_settings' AND column_name = 'logo_url') AS hasBranding`
+         (SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = current_schema() AND table_name = 'tenants') AS "hasTenants",
+         (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'appointments' AND column_name = 'tenant_id') AS "hasTenantIds",
+         (SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'tenant_settings' AND column_name = 'logo_url') AS "hasBranding"`
     );
-    const missing = Object.entries({ '013': rows[0].hasTenants, '014': rows[0].hasTenantIds, '015': rows[0].hasBranding })
+    const missing = Object.entries({ tenants: rows[0].hasTenants, tenant_id: rows[0].hasTenantIds, marca: rows[0].hasBranding })
       .filter(([, present]) => !Number(present)).map(([migration]) => migration);
     if (missing.length) return response.status(503).json({ ok: false, database: 'up', missingMigrations: missing });
     return response.json({ ok: true, database: 'up' });

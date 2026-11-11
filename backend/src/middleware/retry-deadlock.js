@@ -1,10 +1,10 @@
-// Reintenta una ruta transaccional cuando MySQL la elige como víctima de un
-// deadlock (ER_LOCK_DEADLOCK). MySQL ya deshizo la transacción, así que repetirla
+// Reintenta una ruta transaccional cuando PostgreSQL la elige como víctima de un
+// deadlock (código 40P01). La transacción ya quedó anulada, así que repetirla
 // es seguro: la alternativa sería responder un error 500 por un choque pasajero.
 //
 // Solo para rutas cuyo trabajo ocurre entero dentro de una transacción y que
 // no envían respuesta antes de confirmar.
-const isDeadlock = (error) => error?.code === 'ER_LOCK_DEADLOCK' || error?.errno === 1213;
+const isDeadlock = (error) => error?.code === '40P01';
 
 export function retryOnDeadlock(handler, { attempts = 3, baseDelayMs = 25 } = {}) {
   return async function retryingHandler(request, response, next) {

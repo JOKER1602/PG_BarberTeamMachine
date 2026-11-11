@@ -1,16 +1,16 @@
 // Verificación de instalación desde cero (SOLO desarrollo / ensayo previo al despliegue).
 //
-//   node scripts/verify-fresh-install.mjs
 //
-// Crea una base TEMPORAL en el MySQL de backend/.env (requiere permiso CREATE
-// DATABASE), aplica las migraciones de una instalación nueva (001, 002, 007,
-// 013, 014, 015, 016), arranca la API contra ella con una carpeta de subidas
-// temporal y recorre la puesta en marcha real: primer registro, operador,
-// dueños, configuración, QR, servicio, reserva con comprobante y aprobación.
-// Elimina la base y los archivos al terminar. No toca la base configurada.
+//   TEST_POSTGRES_URL=postgresql://postgres@127.0.0.1:5432/postgres node scripts/verify-fresh-install.mjs
+//
+// Crea una base TEMPORAL en ese PostgreSQL (nunca apuntes a Supabase: requiere
+// permiso CREATE DATABASE), aplica las migraciones, arranca la API contra ella
+// con una carpeta de subidas temporal y recorre la puesta en marcha real: primer
+// registro, operador, dueños, configuración, QR, servicio, reserva con
+// comprobante y aprobación. Elimina la base y los archivos al terminar.
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { randomBytes } from 'node:crypto';
@@ -22,26 +22,25 @@ const backend = path.join(root, 'backend');
 process.chdir(backend);
 const require = createRequire(path.join(backend, 'package.json'));
 require('dotenv').config({ path: path.join(backend, '.env') });
-const mysql = require('mysql2/promise');
+const { Client } = require('pg');
 const scratch = `btm_fresh_${Date.now()}`;
 const uploadsDir = mkdtempSync(path.join(tmpdir(), 'btm-fresh-uploads-'));
 const results = [];
 const check = (name, ok, detail = '') => results.push({ name, ok: Boolean(ok), detail });
 
-const admin = await mysql.createConnection({ host: process.env.DATABASE_HOST ?? 'localhost', port: Number(process.env.DATABASE_PORT ?? 3306), user: process.env.DATABASE_USER ?? 'root', password: process.env.DATABASE_PASSWORD ?? '', multipleStatements: true });
-const migrations = ['001_initial_schema.sql', '002_barber_role.sql', '007_service_categories.sql', '013_saas_foundation.sql', '014_tenant_isolation.sql', '015_tenant_branding.sql', '016_relative_upload_urls.sql'];
+if (!process.env.TEST_POSTGRES_URL) { console.error('Define TEST_POSTGRES_URL (un PostgreSQL de pruebas, nunca Supabase).'); process.exit(2); }
+const admin = new Client({ connectionString: process.env.TEST_POSTGRES_URL });
+await admin.connect();
+const scratchUrl = new URL(process.env.TEST_POSTGRES_URL);
+scratchUrl.pathname = `/${scratch}`;
 let server; let pool;
 try {
-  await admin.query(`CREATE DATABASE ${scratch} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
-  for (const file of migrations) {
-    const sql = readFileSync(path.join(root, 'database', file), 'utf8')
-      .replace(/CREATE DATABASE IF NOT EXISTS barber_team_machine[\s\S]*?;/, '')
-      .replaceAll('USE barber_team_machine;', `USE ${scratch};`);
-    await admin.query(`USE ${scratch}; ${sql}`);
-  }
-  check(`migraciones de instalación nueva aplicadas: ${migrations.map((m) => m.slice(0, 3)).join(', ')}`, true);
+  await admin.query(`CREATE DATABASE ${scratch}`);
+  const migrated = spawnSync(process.execPath, [path.join(root, 'scripts/migrate.mjs')], { env: { ...process.env, DATABASE_URL: scratchUrl.toString(), MIGRATION_DATABASE_URL: '', DATABASE_SSL: '' }, encoding: 'utf8' });
+  check('migraciones de instalación nueva aplicadas', migrated.status === 0, migrated.stdout + migrated.stderr);
 
-  process.env.DATABASE_NAME = scratch;
+  process.env.DATABASE_URL = scratchUrl.toString();
+  process.env.DATABASE_SSL = '';
   process.env.UPLOADS_DIR = uploadsDir;
   const { default: app } = await import(pathToFileURL(path.join(backend, 'src/app.js')));
   ({ default: pool } = await import(pathToFileURL(path.join(backend, 'src/config/database.js'))));
@@ -55,13 +54,13 @@ try {
   };
   const password = `Fresh${randomBytes(6).toString('hex')}9`;
 
-  check('la API declara la base lista (013-015 presentes)', (await call('GET', '/health/ready')).data?.ok === true);
+  check('la API declara la base lista', (await call('GET', '/health/ready')).data?.ok === true);
   check('Empyrean existe como barbería inicial', (await call('GET', '/t/empyrean-studio')).status === 200);
 
   // 1. Primera persona: se registra y se designa operadora con el script.
   const registered = await call('POST', '/auth/register', { body: { firstName: 'Olga', lastName: 'Operadora', phone: '71111111', email: 'operadora@fresh.test', password } });
   check('registro público de la primera cuenta', registered.status === 201, JSON.stringify(registered.data));
-  execFileSync(process.execPath, [path.join(root, 'scripts/platform-admin.mjs'), 'agregar', 'operadora@fresh.test'], { env: { ...process.env, DATABASE_NAME: scratch } });
+  execFileSync(process.execPath, [path.join(root, 'scripts/platform-admin.mjs'), 'agregar', 'operadora@fresh.test'], { env: process.env });
   const operator = (await call('POST', '/auth/login', { body: { email: 'operadora@fresh.test', password } })).cookie;
   check('el script la convierte en operadora', (await call('GET', '/platform/tenants', { cookie: operator })).status === 200);
 
@@ -77,7 +76,7 @@ try {
   const settings = await call('PATCH', '/t/empyrean-studio/settings', { cookie: owner, body: { businessName: 'Empyrean Studio', address: 'Buenos Aires 135', city: 'Cochabamba', country: 'Bolivia', phone: '77469963', whatsapp: '77469963', hoursText: 'Lunes a sábado' } });
   check('guarda la configuración del negocio', settings.status === 200);
   const qrForm = new FormData();
-  qrForm.append('qr', new Blob([Buffer.from('89504e470d0a1a0a', 'hex')], { type: 'image/png' }), 'qr.png');
+  qrForm.append('qr', new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')], { type: 'image/png' }), 'qr.png');
   const qr = await call('POST', '/t/empyrean-studio/settings/payment-qr', { cookie: owner, form: qrForm });
   check('sube el QR de pagos (ruta relativa)', qr.status === 201 && qr.data.paymentQrUrl.startsWith('/uploads/qr/'));
   const resaved = await call('PATCH', '/t/empyrean-studio/settings', { cookie: owner, body: { ...qr.data.settings } });
@@ -95,7 +94,7 @@ try {
   const tomorrow = new Date(Date.now() + 86_400_000).toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' });
   const slots = await call('GET', `/t/empyrean-studio/appointments/availability?barberId=${barber.data.id}&serviceIds=${service.data.id}&date=${tomorrow}`);
   const proofForm = new FormData();
-  proofForm.append('proof', new Blob([Buffer.from('89504e470d0a1a0a', 'hex')], { type: 'image/png' }), 'comprobante.png');
+  proofForm.append('proof', new Blob([Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64')], { type: 'image/png' }), 'comprobante.png');
   const proof = await call('POST', '/t/empyrean-studio/payments/proof', { cookie: client, form: proofForm });
   const booking = await call('POST', '/t/empyrean-studio/appointments/multi', { cookie: client, body: { barberId: barber.data.id, serviceIds: [service.data.id], startsAt: slots.data.slots[4].startsAt, paymentProofId: proof.data.proofId } });
   check('el cliente reserva con su comprobante', booking.status === 201, JSON.stringify(booking.data));
@@ -117,7 +116,7 @@ try {
   server?.close();
   await pool?.end().catch(() => {});
   rmSync(uploadsDir, { recursive: true, force: true });
-  await admin.query(`DROP DATABASE IF EXISTS ${scratch}`);
+  await admin.query(`DROP DATABASE IF EXISTS ${scratch} WITH (FORCE)`);
   await admin.end();
   check(`base temporal ${scratch} eliminada`, true);
   for (const r of results) console.log(`${r.ok ? '✔' : '✖'} ${r.name}${r.detail && !r.ok ? ` — ${r.detail}` : ''}`);

@@ -88,25 +88,25 @@ const routes = [
 // Respuestas mínimas de una base simulada para que cada ruta llegue a su
 // camino de éxito y ejecute todas sus consultas.
 function fakeResult(sql, values) {
-  if (/^\s*(INSERT|UPDATE|DELETE)/i.test(sql)) return { affectedRows: 1, insertId: 1 };
-  if (sql.includes('GET_LOCK') || sql.includes('RELEASE_LOCK')) return [{ acquired: 1 }];
-  if (sql.includes('COUNT(*) AS total')) return [{ total: 0 }];
-  if (sql.includes('AS usedElsewhere')) return [{ isMember: 1, isClient: 0, usedElsewhere: 0 }];
+  if (/^\s*(INSERT|UPDATE|DELETE)/i.test(sql)) return { affectedRows: 1, insertId: 1, rows: [{ id: 1 }] };
+  if (/^\s*SET LOCAL/i.test(sql)) return [];
+    if (sql.includes('COUNT(*) AS total')) return [{ total: 0 }];
+  if (sql.includes('AS "usedElsewhere"')) return [{ isMember: 1, isClient: 0, usedElsewhere: 0 }];
   if (sql.includes('FROM users WHERE email')) return [];
-  if (sql.includes('display_name AS displayName, user_id AS userId')) return [{ id: 4, displayName: 'Beto Barbero', userId: null }];
+  if (sql.includes('display_name AS "displayName", user_id AS "userId"')) return [{ id: 4, displayName: 'Beto Barbero', userId: null }];
   if (sql.includes('FROM barbers WHERE id = ? AND tenant_id = ? FOR UPDATE')) return [{ userId: 30, isActive: 1 }];
   if (sql.includes('FROM barber_working_hours') && sql.includes('weekday = ?')) return [{ weekday: values[2], start_minutes: 0, end_minutes: 1439 }];
   if (sql.includes('FROM schedule_blocks') && sql.includes('starts_at < ?')) return [];
   if (sql.includes('SELECT id, starts_at, ends_at FROM appointments')) return [];
-  if (sql.includes('client_id AS clientId, barber_id AS barberId')) return [{ id: 10, clientId: 5, barberId: 2, serviceId: 1, status: 'CONFIRMED', paymentReference: 'ref-1' }];
-  if (sql.includes('client_id AS clientId, status, payment_reference')) return [{ clientId: 5, status: 'PENDING', paymentReference: 'ref-1' }];
-  if (sql.includes('SELECT client_id AS clientId, payment_reference')) return [{ clientId: 5, paymentReference: 'ref-1' }];
-  if (sql.includes('id, barber_id AS barberId, status')) return [{ id: 10, barberId: 2, status: 'COMPLETED' }];
+  if (sql.includes('client_id AS "clientId", barber_id AS "barberId"')) return [{ id: 10, clientId: 5, barberId: 2, serviceId: 1, status: 'CONFIRMED', paymentReference: 'ref-1' }];
+  if (sql.includes('client_id AS "clientId", status, payment_reference')) return [{ clientId: 5, status: 'PENDING', paymentReference: 'ref-1' }];
+  if (sql.includes('SELECT client_id AS "clientId", payment_reference')) return [{ clientId: 5, paymentReference: 'ref-1' }];
+  if (sql.includes('id, barber_id AS "barberId", status')) return [{ id: 10, barberId: 2, status: 'COMPLETED' }];
   if (sql.includes('FROM reviews WHERE appointment_id')) return [];
   if (sql.includes('WHERE service_id = ?')) return [];
   if (sql.includes('b.user_id = ?') && sql.includes('FROM appointments')) return [{ id: 9, clientId: 5 }];
   if (sql.includes('FROM appointments a') && sql.includes('COMPLETED') && sql.includes('LIMIT 100')) return [];
-  if (sql.includes('duration_minutes AS durationMinutes')) return [{ id: 1, serviceId: 1, durationMinutes: 30, price: 50 }];
+  if (sql.includes('duration_minutes AS "durationMinutes"')) return [{ id: 1, serviceId: 1, durationMinutes: 30, price: 50 }];
   return [{ id: 1 }];
 }
 
@@ -152,7 +152,7 @@ for (const [moduleName, method, routePath, options] of routes) {
   test(`aislamiento: ${moduleName} ${method.toUpperCase()} ${routePath} filtra por el tenant de la URL`, async () => {
     const { status, calls } = await runRoute(modules[moduleName], method, routePath, options);
     assert.ok(status < 400, `la ruta respondió ${status}`);
-    const tenantStatements = calls.filter((call) => TENANT_TABLES.test(call.sql) && !/GET_LOCK|RELEASE_LOCK/.test(call.sql));
+    const tenantStatements = calls.filter((call) => TENANT_TABLES.test(call.sql));
     assert.ok(tenantStatements.length > 0, 'la ruta no consultó datos de la barbería');
     for (const call of tenantStatements) {
       assert.match(call.sql, /tenant_id/, `consulta sin tenant_id: ${call.sql}`);

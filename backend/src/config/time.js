@@ -1,16 +1,14 @@
 export const BARBER_TIME_ZONE = 'America/La_Paz';
 // Bolivia no aplica horario de verano: el desfase es fijo.
-export const BARBER_UTC_OFFSET = '-04:00';
+const BARBER_UTC_OFFSET = '-04:00';
 
-// Expresión SQL que convierte una columna DATETIME guardada en UTC a la hora
-// local de la barbería. Usa desfases numéricos, por lo que no depende de que
-// MySQL tenga cargadas sus tablas de zonas horarias.
+// Expresión SQL que convierte una columna TIMESTAMPTZ a la hora local de la barbería.
 export function localSqlTime(column) {
-  return `CONVERT_TZ(${column}, '+00:00', '${BARBER_UTC_OFFSET}')`;
+  return `(${column} AT TIME ZONE '${BARBER_TIME_ZONE}')`;
 }
 
 function sqlUtc(date) {
-  return date.toISOString().slice(0, 19).replace('T', ' ');
+  return date.toISOString();
 }
 
 // Convierte filtros de fecha local (YYYY-MM-DD) en límites UTC para SQL:

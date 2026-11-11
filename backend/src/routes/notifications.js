@@ -13,7 +13,7 @@ router.use(requireAuth);
 router.get('/', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT id, appointment_id AS appointmentId, type, title, message, read_at AS readAt, created_at AS createdAt
+      `SELECT id, appointment_id AS "appointmentId", type, title, message, read_at AS "readAt", created_at AS "createdAt"
        FROM notifications WHERE tenant_id = ? AND user_id = ? ORDER BY created_at DESC LIMIT 50`,
       [tenantIdOf(request), request.auth.sub]
     );
@@ -31,7 +31,7 @@ router.patch('/:id/read', async (request, response, next) => {
 
   try {
     await pool.execute(
-      'UPDATE notifications SET read_at = COALESCE(read_at, UTC_TIMESTAMP()) WHERE id = ? AND tenant_id = ? AND user_id = ?',
+      'UPDATE notifications SET read_at = COALESCE(read_at, now()) WHERE id = ? AND tenant_id = ? AND user_id = ?',
       [parsed.data, tenantIdOf(request), request.auth.sub]
     );
     return response.status(204).send();

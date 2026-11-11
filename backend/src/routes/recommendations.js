@@ -37,9 +37,9 @@ router.get('/', requireAuth, async (request, response, next) => {
   const connection = await pool.getConnection();
   try {
     const [history] = await connection.execute(
-      `SELECT a.service_id AS serviceId, a.barber_id AS barberId, a.starts_at AS startsAt,
-              s.name AS serviceName, s.price, s.duration_minutes AS durationMinutes,
-              b.display_name AS barberName
+      `SELECT a.service_id AS "serviceId", a.barber_id AS "barberId", a.starts_at AS "startsAt",
+              s.name AS "serviceName", s.price, s.duration_minutes AS "durationMinutes",
+              b.display_name AS "barberName"
        FROM appointments a
        JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id
        JOIN barbers b ON b.id = a.barber_id AND b.tenant_id = a.tenant_id
@@ -67,14 +67,12 @@ router.get('/', requireAuth, async (request, response, next) => {
       const excluded = [...serviceIds, ...serviceSuggestions.map((item) => Number(item.id))];
       const clause = excluded.length ? `AND s.id NOT IN (${excluded.map(() => '?').join(', ')})` : '';
       const [popular] = await connection.execute(
-        `SELECT s.id, s.name, s.price, s.duration_minutes AS durationMinutes, COUNT(a.id) AS bookings
+        `SELECT s.id, s.name, s.price, s.duration_minutes AS "durationMinutes", COUNT(a.id) AS bookings
          FROM services s
          LEFT JOIN appointments a ON a.service_id = s.id AND a.tenant_id = s.tenant_id AND a.status = 'COMPLETED'
          WHERE s.tenant_id = ? AND s.is_active = TRUE ${clause}
-         GROUP BY s.id ORDER BY bookings DESC, s.name LIMIT ${Number(3 - serviceSuggestions.length)}`,
-        // LIMIT va como entero literal: algunas versiones de MySQL 8 rechazan
-        // un LIMIT parametrizado en sentencias preparadas (pool.execute).
-        [tenantId, ...excluded]
+         GROUP BY s.id ORDER BY bookings DESC, s.name LIMIT ?`,
+        [tenantId, ...excluded, 3 - serviceSuggestions.length]
       );
       serviceSuggestions = [...serviceSuggestions, ...popular.map((item) => ({
         id: item.id, name: item.name, price: Number(item.price), durationMinutes: item.durationMinutes,
@@ -86,7 +84,7 @@ router.get('/', requireAuth, async (request, response, next) => {
 
     const servicePlaceholders = serviceIds.map(() => '?').join(', ');
     const [compatibleBarbers] = await connection.execute(
-      `SELECT b.id, b.display_name AS displayName
+      `SELECT b.id, b.display_name AS "displayName"
        FROM barbers b JOIN barber_services bs ON bs.barber_id = b.id AND bs.tenant_id = b.tenant_id
        WHERE b.tenant_id = ? AND b.is_active = TRUE AND bs.service_id IN (${servicePlaceholders})
        GROUP BY b.id HAVING COUNT(DISTINCT bs.service_id) = ?

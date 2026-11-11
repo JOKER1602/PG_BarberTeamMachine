@@ -12,7 +12,7 @@ const API_URL = import.meta.env.VITE_API_URL ?? defaultApiUrl;
 
 // Módulos de negocio: se piden a la barbería de la URL (/api/t/:slug/...).
 // Autenticación y salud son globales.
-const TENANT_MODULE = /^\/(services|barbers|settings|admin|barber|appointments|payments|reviews|notifications|recommendations|assistant)(?=\/|\?|$)/;
+const TENANT_MODULE = /^\/(services|barbers|settings|admin|barber|appointments|payments|reviews|notifications|recommendations)(?=\/|\?|$)/;
 
 export function apiUrl(path) {
   return TENANT_MODULE.test(path) ? `${API_URL}/t/${currentTenantSlug()}${path}` : `${API_URL}${path}`;
@@ -80,7 +80,6 @@ export const api = {
     if (serviceIds.length) query.set('serviceIds', serviceIds.join(','));
     return request(`/recommendations?${query.toString()}`);
   },
-  assistantQuery: (query) => request('/assistant/query', { method: 'POST', body: JSON.stringify({ query }) }),
   register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }).then(withSessionRole),
   login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }).then(withSessionRole),
   me: () => request('/auth/me').then(withSessionRole),

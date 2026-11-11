@@ -37,14 +37,6 @@ test('la API expone salud, valida entradas y protege los endpoints privados', as
     assert.equal(health.response.status, 200);
     assert.equal(health.body.ok, true);
 
-    const invalidAssistant = await request('/assistant/query', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query: 'x' })
-    });
-    assert.equal(invalidAssistant.response.status, 400);
-    assert.match(invalidAssistant.body.message, /al menos tres/i);
-
     const privateDashboard = await request('/admin/dashboard');
     assert.equal(privateDashboard.response.status, 401);
     assert.equal(privateDashboard.body.message, 'Autenticacion requerida');

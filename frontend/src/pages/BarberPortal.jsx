@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
-import { api, getStoredSession, logoutToHome, saveSession } from '../api.js';
-import { brandInitials, brandWords, tenantBrand, tenantHref } from '../tenant.js';
+import { api, getStoredSession, logoutToHome } from '../api.js';
+import { tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
 import RequiredPasswordChange from '../components/RequiredPasswordChange.jsx';
 

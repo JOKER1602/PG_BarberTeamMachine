@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, getStoredSession, logoutToHome, saveSession } from '../api.js';
-import { brandInitials, brandWords, tenantBrand, tenantHref } from '../tenant.js';
+import { brandInitials, tenantBrand, tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
 
 function useAutoDismiss(message, dismiss, delay = 4500) {
@@ -141,12 +141,11 @@ function ProfileView({ session, profile, setProfile, onSave, onChangePassword })
       {editing ? <form onSubmit={submit}>
         <label>Nombre<input required value={profile.firstName} onChange={(event) => setProfile({ ...profile, firstName: event.target.value })}/></label>
         <label>Apellido<input required value={profile.lastName} onChange={(event) => setProfile({ ...profile, lastName: event.target.value })}/></label>
-        <label>Número de teléfono<div className="client-phone"><span>+591</span><input inputMode="numeric" maxLength="12" value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value.replace(/[^0-9]/g, ''), whatsappConsent: false })}/></div></label>
-        <label className="whatsapp-consent"><input type="checkbox" checked={profile.whatsappConsent} onChange={(event) => setProfile({ ...profile, whatsappConsent: event.target.checked })}/><span>Acepto recibir por WhatsApp un recordatorio 2 horas antes de mis citas confirmadas.</span></label>
+        <label>Número de teléfono<div className="client-phone"><span>+591</span><input inputMode="numeric" maxLength="12" value={profile.phone} onChange={(event) => setProfile({ ...profile, phone: event.target.value.replace(/[^0-9]/g, ''), whatsappConsent: false })}/></div></label>
         <label>Correo electrónico<input value={session.email} disabled/></label>
         <button className="client-primary">Guardar cambios</button>
       </form> : <>
-        <section className="profile-phone-card"><b>Teléfono de contacto</b><p>{profile.phone ? `+591 ${profile.phone}` : 'Aún no registraste un número.'}</p><span>{profile.whatsappConsent ? 'Recordatorios por WhatsApp activados.' : 'Recordatorios por WhatsApp desactivados. Puedes activarlos desde Editar.'}</span></section>
+        <section className="profile-phone-card"><b>Teléfono de contacto</b><p>{profile.phone ? `+591 ${profile.phone}` : 'Aún no registraste un número.'}</p></section>
         <dl className="profile-details"><div><dt>Nombre</dt><dd>{session.firstName}</dd></div><div><dt>Apellido</dt><dd>{session.lastName}</dd></div><div><dt>Número de teléfono</dt><dd>{profile.phone ? `+591 ${profile.phone}` : 'No registrado'}</dd></div><div><dt>Correo electrónico</dt><dd>{session.email}</dd></div></dl>
         <button className="profile-password-button" onClick={() => setShowPasswordModal(true)}>⌑ &nbsp; Cambiar contraseña</button>
       </>}
@@ -173,7 +172,7 @@ export default function ClientArea() {
   const [appointmentToCancel, setAppointmentToCancel] = useState(null);
   const [activeTab, setActiveTab] = useState(() => new URLSearchParams(window.location.search).get('tab') === 'perfil' ? 'perfil' : 'historial');
   const [historyView, setHistoryView] = useState('programadas');
-  const [profile, setProfile] = useState(() => ({ firstName: session?.firstName ?? '', lastName: session?.lastName ?? '', phone: session?.phone?.replace(/^\+591\s?/, '') ?? '', whatsappConsent: Boolean(session?.whatsappConsent) }));
+  const [profile, setProfile] = useState(() => ({ firstName: session?.firstName ?? '', lastName: session?.lastName ?? '', phone: session?.phone?.replace(/^\+591\s?/, '') ?? '' }));
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
   useAutoDismiss(message, setMessage);

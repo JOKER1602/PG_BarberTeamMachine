@@ -17,15 +17,15 @@ router.get('/', async (request, response, next) => {
   try {
     const [[summary]] = await pool.execute(
       `SELECT COUNT(*) AS total, COALESCE(ROUND(AVG(rating), 1), 0) AS average,
-       COALESCE(SUM(rating = 5), 0) AS five, COALESCE(SUM(rating = 4), 0) AS four,
-       COALESCE(SUM(rating = 3), 0) AS three, COALESCE(SUM(rating = 2), 0) AS two, COALESCE(SUM(rating = 1), 0) AS one
+       COUNT(*) FILTER (WHERE rating = 5) AS five, COUNT(*) FILTER (WHERE rating = 4) AS four,
+       COUNT(*) FILTER (WHERE rating = 3) AS three, COUNT(*) FILTER (WHERE rating = 2) AS two, COUNT(*) FILTER (WHERE rating = 1) AS one
        FROM reviews ${filter}`,
       params
     );
     const [reviews] = await pool.execute(
-      `SELECT r.id, r.rating, r.comment, r.created_at AS createdAt,
-       CONCAT(u.first_name, ' ', LEFT(u.last_name, 1), '.') AS clientName,
-       b.display_name AS barberName
+      `SELECT r.id, r.rating, r.comment, r.created_at AS "createdAt",
+       CONCAT(u.first_name, ' ', LEFT(u.last_name, 1), '.') AS "clientName",
+       b.display_name AS "barberName"
        FROM reviews r JOIN users u ON u.id = r.client_id
        LEFT JOIN barbers b ON b.id = r.barber_id AND b.tenant_id = r.tenant_id
        ${filter.replaceAll('tenant_id', 'r.tenant_id').replaceAll('is_visible', 'r.is_visible').replaceAll(' barber_id', ' r.barber_id')} ORDER BY r.created_at DESC LIMIT 6`,
@@ -49,7 +49,7 @@ router.post('/', requireAuth, async (request, response, next) => {
     const tenantId = tenantIdOf(request);
     const { appointmentId, rating, comment } = parsed.data;
     const [[appointment]] = await pool.execute(
-      `SELECT id, barber_id AS barberId, status
+      `SELECT id, barber_id AS "barberId", status
        FROM appointments WHERE id = ? AND tenant_id = ? AND client_id = ?`,
       [appointmentId, tenantId, request.auth.sub]
     );
@@ -62,7 +62,7 @@ router.post('/', requireAuth, async (request, response, next) => {
 
     const [created] = await pool.execute(
       `INSERT INTO reviews (tenant_id, client_id, appointment_id, barber_id, rating, comment)
-       VALUES (?, ?, ?, ?, ?, ?)`,
+       VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
       [tenantId, request.auth.sub, appointmentId, appointment.barberId, rating, comment]
     );
     return response.status(201).json({ review: { id: created.insertId, appointmentId, rating, comment } });

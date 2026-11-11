@@ -1,28 +1,47 @@
-// Prueba de estrés de la plataforma: 3 barberías, 26 clientes por día cada una.
+// Prueba de estrés y capacidad de la plataforma.
 //
-//   node tests/performance/stress-barberias.mjs
+//   TEST_POSTGRES_URL=postgresql://postgres@127.0.0.1:5432/postgres node tests/performance/stress-barberias.mjs
 //
-// Crea una base TEMPORAL en el MySQL de backend/.env, levanta un servidor propio
-// en modo producción (con correo y WhatsApp desactivados) y al terminar elimina
+// Escenario (variables opcionales):
+//   STRESS_TENANTS=4               barberías
+//   STRESS_BARBERS=3,4             barberos por barbería (se repite el patrón: 3, 4, 3, 4)
+//   STRESS_SERVICES_PER_BARBER=9   servicios por barbero al día (clientes del día = barberos × servicios)
+// Entorno de producción simulado (opcional):
+//   STRESS_DOCKER_IMAGE=reservas-prueba  corre la API en esa imagen Docker en vez de un proceso local
+//   STRESS_CPUS=0.5 STRESS_MEMORY=512m   límites del contenedor (tamaño de la instancia)
+//   STRESS_DB_LATENCY_MS=20              ida y vuelta añadida a cada intercambio con la base
+//
+// Con TEST_POSTGRES_URL (un PostgreSQL de pruebas, nunca Supabase) crea una base TEMPORAL, levanta un servidor propio
+// en modo producción (con el correo desactivado) y al terminar elimina
 // la base, el usuario y los archivos. No toca la base configurada ni envía mensajes.
 import path from 'node:path';
 import os from 'node:os';
+import net from 'node:net';
 import { execFile, spawn, spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import sharp from 'sharp';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const backend = path.join(root, 'backend');
 const require = createRequire(path.join(backend, 'package.json'));
 const dotenv = require('dotenv');
-const mysql = require('mysql2/promise');
+const { Client } = require('pg');
 const envFile = dotenv.parse(readFileSync(path.join(backend, '.env')));
 
-const TENANTS = 3;
-const CLIENTS_PER_DAY = 26;
-const BARBERS = 3;
+const TENANTS = Number(process.env.STRESS_TENANTS ?? 4);
+const BARBER_PATTERN = (process.env.STRESS_BARBERS ?? '3,4').split(',').map(Number);
+const SERVICES_PER_BARBER = Number(process.env.STRESS_SERVICES_PER_BARBER ?? 9);
+const barbersOf = (n) => BARBER_PATTERN[(n - 1) % BARBER_PATTERN.length];
+const TOTAL_BARBERS = Array.from({ length: TENANTS }, (_, i) => barbersOf(i + 1)).reduce((a, b) => a + b, 0);
+const DAY_CLIENTS = TOTAL_BARBERS * SERVICES_PER_BARBER;
+const DOCKER_IMAGE = process.env.STRESS_DOCKER_IMAGE;
+const CPUS = process.env.STRESS_CPUS ?? '0.5';
+const MEMORY = process.env.STRESS_MEMORY ?? '512m';
+const DB_LATENCY_MS = Number(process.env.STRESS_DB_LATENCY_MS ?? 0);
+const CONTAINER = `btm-estres-${Date.now()}`;
 const PORT = 3217;
 const BASE = `http://127.0.0.1:${PORT}/api`;
 const stamp = Date.now();
@@ -31,19 +50,22 @@ const APP_USER = `stress_${stamp % 100000}`;
 const APP_PASSWORD = `Stress${randomBytes(12).toString('hex')}9`;
 const PASSWORD = `Clave${randomBytes(6).toString('hex')}A1`;
 const uploadsDir = mkdtempSync(path.join(os.tmpdir(), 'btm-stress-'));
-const proofImage = Buffer.alloc(300 * 1024, 7); // tamaño típico de una captura de comprobante
+const proofImage = await sharp(randomBytes(400 * 250 * 3), { raw: { width: 400, height: 250, channels: 3 } }).png().toBuffer(); // tamaño típico de una captura de comprobante
 
-const admin = {
-  host: envFile.DATABASE_HOST ?? 'localhost', port: Number(envFile.DATABASE_PORT ?? 3306),
-  user: envFile.DATABASE_USER ?? 'root', password: envFile.DATABASE_PASSWORD ?? ''
+if (!process.env.TEST_POSTGRES_URL) { console.error('Define TEST_POSTGRES_URL (un PostgreSQL de pruebas, nunca Supabase).'); process.exit(2); }
+const databaseUrl = (database, user, password) => {
+  const url = new URL(process.env.TEST_POSTGRES_URL);
+  url.pathname = `/${database}`;
+  if (user) { url.username = user; url.password = password; }
+  return url.toString();
 };
 
 // Credenciales reales del .env en blanco: dotenv no pisa variables ya definidas.
-const blanked = Object.fromEntries(['EMAIL_HOST', 'RESEND_API_KEY', 'BREVO_API_KEY', 'WHATSAPP_PROVIDER',
-  ...Object.keys(envFile).filter((key) => /^(EMAIL_|RESEND|BREVO|META_|TWILIO_|WHATSAPP_)/.test(key))].map((key) => [key, '']));
+const blanked = Object.fromEntries(['EMAIL_HOST', 'RESEND_API_KEY', 'BREVO_API_KEY',
+  ...Object.keys(envFile).filter((key) => /^(EMAIL_|RESEND|BREVO)/.test(key))].map((key) => [key, '']));
 const serverEnv = {
   ...process.env, ...blanked, NODE_ENV: 'production', PORT: String(PORT), FRONTEND_URL: 'https://estres.test', JWT_SECRET: randomBytes(48).toString('base64url'),
-  DATABASE_HOST: admin.host, DATABASE_PORT: String(admin.port), DATABASE_NAME: DB, DATABASE_USER: APP_USER, DATABASE_PASSWORD: APP_PASSWORD, DATABASE_SSL: '',
+  DATABASE_URL: databaseUrl(DB, APP_USER, APP_PASSWORD), DATABASE_SSL: '',
   TRUST_PROXY: 'true', CLIENT_IP_HEADER: 'x-real-ip', UPLOADS_DIR: uploadsDir, DEFAULT_TENANT_SLUG: 'empyrean-studio'
 };
 
@@ -142,8 +164,33 @@ async function book(client, date) {
   return { ok: false, reason: 'sin horario tras 12 intentos' };
 }
 
+// --- Latencia simulada hacia la base ------------------------------------------
+// Proxy TCP que retrasa cada intercambio la mitad del ida y vuelta en cada sentido.
+let latencyProxy;
+function startLatencyProxy(targetPort) {
+  const delay = DB_LATENCY_MS / 2;
+  latencyProxy = net.createServer((client) => {
+    const upstream = net.connect(targetPort, '127.0.0.1');
+    const relay = (from, to) => from.on('data', (chunk) => setTimeout(() => { if (!to.destroyed) to.write(chunk); }, delay));
+    relay(client, upstream); relay(upstream, client);
+    const close = () => { client.destroy(); upstream.destroy(); };
+    client.on('error', close); upstream.on('error', close); client.on('close', close); upstream.on('close', close);
+  });
+  return new Promise((resolve) => latencyProxy.listen(0, '127.0.0.1', () => resolve(latencyProxy.address().port)));
+}
+
 // --- Uso del servidor ---------------------------------------------------------
 let server; let serverLog = '';
+const parseSize = (text) => { const [, value, unit] = text.trim().match(/([\d.]+)\s*([KMG]?i?B)/) ?? []; return Number(value) * ({ B: 1 / 2 ** 20, KiB: 1 / 1024, MiB: 1, GiB: 1024, kB: 1 / 1024, MB: 1, GB: 1024 }[unit] ?? 0); };
+function sampleContainer() {
+  return new Promise((resolve) => {
+    execFile('docker', ['stats', '--no-stream', '--format', '{{.CPUPerc}};{{.MemUsage}}', CONTAINER], (error, stdout) => {
+      if (error) return resolve(null);
+      const [cpu, mem] = stdout.trim().split(';');
+      resolve({ cpu: parseFloat(cpu), rss: parseSize(mem.split('/')[0]) });
+    });
+  });
+}
 function sampleServer() {
   return new Promise((resolve) => {
     execFile('powershell', ['-NoProfile', '-Command', `(Get-Process -Id ${server.pid} | Select-Object CPU,WorkingSet64 | ConvertTo-Json -Compress)`], (error, stdout) => {
@@ -153,6 +200,14 @@ function sampleServer() {
 }
 let sampling = true;
 async function samplingLoop() {
+  if (DOCKER_IMAGE) {
+    while (sampling) {
+      const current = await sampleContainer();
+      if (current && bucket && !bucket.ended) { bucket.cpu.push(current.cpu); bucket.rss.push(current.rss); }
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+    }
+    return;
+  }
   let last = await sampleServer(); let lastAt = Date.now();
   while (sampling) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
@@ -188,32 +243,52 @@ function report() {
   return out;
 }
 
-const c = await mysql.createConnection({ ...admin, multipleStatements: true });
+const server0 = new Client({ connectionString: process.env.TEST_POSTGRES_URL });
+await server0.connect();
+let c;
 const checks = [];
 const check = (name, ok, detail = '') => { checks.push({ name, ok: Boolean(ok), detail }); log(`${ok ? '  ✔' : '  ✖'} ${name}${detail ? ` — ${detail}` : ''}`); };
 let exitCode = 0;
 
 try {
   // --- Preparación ---------------------------------------------------------
-  await c.query(`CREATE DATABASE ${DB} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`);
+  await server0.query(`CREATE DATABASE ${DB}`);
+  c = new Client({ connectionString: databaseUrl(DB) });
+  await c.connect();
   const migrated = spawnSync(process.execPath, [path.join(root, 'scripts/migrate.mjs')], {
-    env: { ...serverEnv, MIGRATION_DATABASE_URL: `mysql://${encodeURIComponent(admin.user)}:${encodeURIComponent(admin.password)}@${admin.host}:${admin.port}/${DB}` }, encoding: 'utf8'
+    env: { ...serverEnv, MIGRATION_DATABASE_URL: databaseUrl(DB) }, encoding: 'utf8'
   });
   if (migrated.status !== 0) throw new Error(`migración: ${migrated.stdout}${migrated.stderr}`);
-  server = spawn(process.execPath, ['src/server.js'], { cwd: backend, env: serverEnv });
-  server.stdout.on('data', (chunk) => { serverLog += chunk; });
-  server.stderr.on('data', (chunk) => { serverLog += chunk; });
+  const appUrlVia = (host, port) => { const url = new URL(databaseUrl(DB, APP_USER, APP_PASSWORD)); url.hostname = host; url.port = String(port); return url.toString(); };
+  const proxyPort = (DOCKER_IMAGE || DB_LATENCY_MS) ? await startLatencyProxy(Number(new URL(process.env.TEST_POSTGRES_URL).port || 5432)) : null;
+  if (DOCKER_IMAGE) {
+    // Mismas variables que en producción, sin claves de correo.
+    const containerEnv = { NODE_ENV: 'production', PORT: '3000', FRONTEND_URL: serverEnv.FRONTEND_URL, JWT_SECRET: serverEnv.JWT_SECRET,
+      DATABASE_URL: appUrlVia('host.docker.internal', proxyPort), DATABASE_SSL: '', TRUST_PROXY: 'true', CLIENT_IP_HEADER: 'x-real-ip',
+      DEFAULT_TENANT_SLUG: 'empyrean-studio' };
+    const args = ['run', '-d', '--name', CONTAINER, `--cpus=${CPUS}`, `--memory=${MEMORY}`, '-p', `${PORT}:3000`, ...Object.entries(containerEnv).flatMap(([k, v]) => ['-e', `${k}=${v}`]), DOCKER_IMAGE];
+    const started = spawnSync('docker', args, { encoding: 'utf8' });
+    if (started.status !== 0) throw new Error(`docker run: ${started.stderr}`);
+    server = { kill: () => spawnSync('docker', ['rm', '-f', CONTAINER]) };
+  } else {
+    const env = proxyPort ? { ...serverEnv, DATABASE_URL: appUrlVia('127.0.0.1', proxyPort) } : serverEnv;
+    server = spawn(process.execPath, ['src/server.js'], { cwd: backend, env });
+    server.stdout.on('data', (chunk) => { serverLog += chunk; });
+    server.stderr.on('data', (chunk) => { serverLog += chunk; });
+  }
+  log(`Entorno: ${DOCKER_IMAGE ? `Docker ${DOCKER_IMAGE}, ${CPUS} vCPU, ${MEMORY} de RAM` : 'proceso local sin límites'} · latencia simulada a la base: ${DB_LATENCY_MS} ms ida y vuelta`);
+  log(`Escenario: ${TENANTS} barberías, ${TOTAL_BARBERS} barberos, ${SERVICES_PER_BARBER} servicios por barbero → ${DAY_CLIENTS} reservas al día`);
   for (let i = 0; i < 40; i += 1) {
     const up = await fetch(`${BASE}/health/ready`).then((r) => r.ok).catch(() => false);
     if (up) break;
     await new Promise((resolve) => setTimeout(resolve, 500));
-    if (i === 39) throw new Error(`el servidor no arrancó:\n${serverLog}`);
+    if (i === 39) throw new Error(`el servidor no arrancó:\n${DOCKER_IMAGE ? spawnSync('docker', ['logs', CONTAINER], { encoding: 'utf8' }).stderr : serverLog}`);
   }
   samplingLoop();
 
-  startPhase('Preparación: 3 barberías, 9 barberos, 12 servicios');
+  startPhase(`Preparación: ${TENANTS} barberías, ${TOTAL_BARBERS} barberos, ${TENANTS * 4} servicios`);
   const operator = await call('alta de cuentas', 'POST', '/auth/register', { body: { firstName: 'Olga', lastName: 'Operadora', phone: '70000001', email: 'operadora@estres.test', password: PASSWORD } });
-  await c.query(`INSERT INTO ${DB}.platform_administrators (user_id) SELECT id FROM ${DB}.users WHERE email = 'operadora@estres.test'`);
+  await c.query(`INSERT INTO reservas.platform_administrators (user_id) SELECT id FROM reservas.users WHERE email = 'operadora@estres.test'`);
   const tenants = [];
   for (let n = 1; n <= TENANTS; n += 1) {
     const slug = `barberia-estres-${n}`;
@@ -228,7 +303,7 @@ try {
       services.push((await call('configuración', 'POST', `${t}/services`, { cookie: owner, body: { name: `Servicio ${index + 1}`, price: 40 + index * 10, durationMinutes: duration, categoryId: categories[0].id } })).data.id);
     }
     const barbers = []; const barberCookies = new Map();
-    for (const name of ['Uno', 'Dos', 'Tres'].slice(0, BARBERS)) {
+    for (const name of ['Uno', 'Dos', 'Tres', 'Cuatro', 'Cinco', 'Seis'].slice(0, barbersOf(n))) {
       const id = (await call('configuración', 'POST', `${t}/barbers`, { cookie: owner, body: { displayName: `Barbero ${name}` } })).data.id;
       await call('configuración', 'PUT', `${t}/barbers/${id}/services`, { cookie: owner, body: { serviceIds: services } });
       for (let weekday = 1; weekday <= 7; weekday += 1) await call('configuración', 'POST', `${t}/barbers/${id}/working-hours`, { cookie: owner, body: { weekday, startTime: '09:00', endTime: '19:00' } });
@@ -237,14 +312,14 @@ try {
       barberCookies.set(id, (await call('inicio de sesión', 'POST', '/auth/login', { body: { email: barberEmail, password: PASSWORD } })).cookie);
       barbers.push(id);
     }
-    tenants.push({ slug, owner, services, barbers, barberCookies });
+    tenants.push({ slug, owner, services, barbers, barberCookies, clientsPerDay: barbers.length * SERVICES_PER_BARBER });
   }
   endPhase();
 
   // --- 1. Un día real ------------------------------------------------------
-  startPhase(`1. Día completo: ${TENANTS * CLIENTS_PER_DAY} clientes, recorrido entero`);
+  startPhase(`1. Día completo: ${DAY_CLIENTS} clientes, recorrido entero`);
   const dayDate = dateAfter(2);
-  const dayClients = tenants.flatMap((tenant) => Array.from({ length: CLIENTS_PER_DAY }, () => tenant));
+  const dayClients = tenants.flatMap((tenant) => Array.from({ length: tenant.clientsPerDay }, () => tenant));
   const dayBookings = await pool(dayClients, 4, async (tenant) => {
     const client = await registerClient(tenant);
     await browse(tenant, client);
@@ -266,13 +341,16 @@ try {
   check(`día completo: ${dayOk.length}/${dayClients.length} reservas creadas`, dayOk.length === dayClients.length, [...new Set(dayBookings.filter((b) => !b.ok).map((b) => b.reason))].join('; '));
 
   // --- 2. Picos -------------------------------------------------------------
-  const burst = async (label, perTenant, days) => {
+  // Los clientes del pico ya tienen cuenta (se registran antes, fuera de la medición):
+  // el pico mide reservas simultáneas. El registro masivo se mide aparte (fase 2d).
+  const burst = async (label, multiplier, days) => {
+    const list = tenants.flatMap((tenant) => Array.from({ length: tenant.clientsPerDay * multiplier }, (_, i) => ({ tenant, date: dateAfter(days[i % days.length]) })));
+    bucket = null;
+    const ready = await pool(list, 4, async ({ tenant, date }) => ({ client: await registerClient(tenant), date }));
     startPhase(label);
-    const list = tenants.flatMap((tenant) => Array.from({ length: perTenant }, (_, i) => ({ tenant, date: dateAfter(days[i % days.length]) })));
     const started = Date.now();
-    const results = await Promise.all(list.map(async ({ tenant, date }) => {
-      const client = await registerClient(tenant);
-      await browse(tenant, client);
+    const results = await Promise.all(ready.map(async ({ client, date }) => {
+      await browse(client.tenant, client);
       return book(client, date);
     }));
     endPhase();
@@ -280,13 +358,24 @@ try {
     check(`${label}: ${ok.length}/${list.length} reservas en ${((Date.now() - started) / 1000).toFixed(1)} s`, ok.length === list.length, [...new Set(results.filter((b) => !b.ok).map((b) => b.reason))].join('; '));
     return ok;
   };
-  const burst1 = await burst(`2a. Pico: los ${TENANTS * CLIENTS_PER_DAY} clientes del día a la vez`, CLIENTS_PER_DAY, [3]);
-  const burst3 = await burst(`2b. Pico x3: ${TENANTS * CLIENTS_PER_DAY * 3} clientes a la vez`, CLIENTS_PER_DAY * 3, [4, 5, 6]);
+  const burst1 = await burst(`2a. Pico: los ${DAY_CLIENTS} clientes del día a la vez`, 1, [3]);
+  await burst(`2b. Pico x3: ${DAY_CLIENTS * 3} clientes a la vez`, 3, [4, 5, 6]);
 
   // Aprobación masiva concurrente (los dueños validando pagos).
   startPhase(`2c. Aprobación concurrente de ${burst1.length} pagos`);
   await pool(burst1, 15, ({ id, client }) => call('aprobar pago', 'PATCH', `/t/${client.tenant.slug}/appointments/${id}/status`, { cookie: client.tenant.owner, body: { status: 'CONFIRMED' } }));
   endPhase();
+
+  // Registro de clientes nuevos a la vez: cada contraseña se cifra con bcrypt
+  // (costo 12), lo más pesado en CPU de toda la API.
+  for (const signups of [10, 30]) {
+    startPhase(`2d. Registro simultáneo de ${signups} clientes nuevos`);
+    const started = Date.now();
+    const created = await Promise.all(Array.from({ length: signups }, (_, i) => registerClient(tenants[i % tenants.length])));
+    endPhase();
+    const ok = created.filter((item) => item.status === 201).length;
+    log(`  ${ok}/${signups} registros en ${((Date.now() - started) / 1000).toFixed(1)} s`);
+  }
 
   // --- 3. Colisiones ---------------------------------------------------------
   startPhase('3a. Colisión: 20 clientes por barbería, mismo barbero y hora');
@@ -307,6 +396,7 @@ try {
   const rescheduleDate = dateAfter(20);
   const rescheduleResults = await Promise.all(tenants.flatMap((tenant) => {
     const mine = burst1.filter((item) => item.client.tenant === tenant);
+    if (!mine.length) return [];
     const counts = new Map(); for (const item of mine) counts.set(item.barber, (counts.get(item.barber) ?? 0) + 1);
     const barber = [...counts.entries()].sort((a, b) => b[1] - a[1])[0][0];
     return mine.filter((item) => item.barber === barber).slice(0, 10).map((item) => call('reprogramar (colisión)', 'PATCH', `/t/${tenant.slug}/appointments/${item.id}/reschedule`, {
@@ -316,7 +406,7 @@ try {
   endPhase();
   for (const tenant of tenants) {
     const mine = rescheduleResults.filter((item) => item.tenant === tenant.slug);
-    check(`colisión al reprogramar en ${tenant.slug}: exactamente 1 ganador de ${mine.length}`, mine.filter((item) => item.status === 200).length === 1, `200: ${mine.filter((i) => i.status === 200).length}, 409: ${mine.filter((i) => i.status === 409).length}`);
+    check(`colisión al reprogramar en ${tenant.slug}: exactamente 1 ganador de ${mine.length}`, mine.length > 0 && mine.filter((item) => item.status === 200).length === 1, `200: ${mine.filter((i) => i.status === 200).length}, 409: ${mine.filter((i) => i.status === 409).length}`);
   }
 
   // --- 4. Tráfico creciente ---------------------------------------------------
@@ -330,8 +420,7 @@ try {
         const t = `/t/${tenant.slug}`;
         const roll = Math.random();
         if (roll < 0.45) await call('disponibilidad', 'GET', `${t}/appointments/availability?barberId=${pick(tenant.barbers)}&serviceIds=${pick(tenant.services)}&date=${availabilityDate}`);
-        else if (roll < 0.9) await call('catálogo', 'GET', `${t}/${pick(['services', 'barbers', 'settings', 'reviews'])}`);
-        else if (roll < 0.95) await call('asistente', 'POST', `${t}/assistant/query`, { body: { query: 'servicio 1 mañana a las 4 pm' } });
+        else if (roll < 0.95) await call('catálogo', 'GET', `${t}/${pick(['services', 'barbers', 'settings', 'reviews'])}`);
         else await call('agenda del dueño', 'GET', `${t}/appointments/admin`, { cookie: tenant.owner });
       }
     }));
@@ -347,18 +436,19 @@ try {
 
   // --- Integridad ----------------------------------------------------------------
   log('\n================ INTEGRIDAD DE DATOS ================');
-  const one = async (sql) => (await c.query(sql))[0][0];
-  check('sin citas solapadas en ningún barbero', Number((await one(`SELECT COUNT(*) AS n FROM ${DB}.appointments a JOIN ${DB}.appointments b ON a.barber_id = b.barber_id AND a.id < b.id AND a.starts_at < b.ends_at AND a.ends_at > b.starts_at WHERE a.status IN ('PENDING','CONFIRMED','COMPLETED') AND b.status IN ('PENDING','CONFIRMED','COMPLETED')`)).n) === 0,
-    `${(await one(`SELECT COUNT(*) AS n FROM ${DB}.appointments a JOIN ${DB}.appointments b ON a.barber_id = b.barber_id AND a.id < b.id AND a.starts_at < b.ends_at AND a.ends_at > b.starts_at WHERE a.status IN ('PENDING','CONFIRMED','COMPLETED') AND b.status IN ('PENDING','CONFIRMED','COMPLETED')`)).n} pares solapados`);
-  check('cita, barbero y servicio siempre de la misma barbería', Number((await one(`SELECT COUNT(*) AS n FROM ${DB}.appointments a JOIN ${DB}.barbers b ON b.id = a.barber_id JOIN ${DB}.services s ON s.id = a.service_id WHERE a.tenant_id <> b.tenant_id OR a.tenant_id <> s.tenant_id`)).n) === 0);
-  check('reseñas, notificaciones y recordatorios en la barbería de su cita', Number((await one(`SELECT (SELECT COUNT(*) FROM ${DB}.reviews r JOIN ${DB}.appointments a ON a.id = r.appointment_id WHERE r.tenant_id <> a.tenant_id) + (SELECT COUNT(*) FROM ${DB}.notifications n JOIN ${DB}.appointments a ON a.id = n.appointment_id WHERE n.tenant_id <> a.tenant_id) + (SELECT COUNT(*) FROM ${DB}.reminder_jobs r JOIN ${DB}.appointments a ON a.id = r.appointment_id WHERE r.tenant_id <> a.tenant_id) AS n`)).n) === 0);
-  check('cada comprobante se usó una sola vez', Number((await one(`SELECT COUNT(*) AS n FROM (SELECT payment_proof_url FROM ${DB}.appointments WHERE payment_proof_url IS NOT NULL GROUP BY payment_proof_url HAVING COUNT(DISTINCT payment_reference) > 1) x`)).n) === 0);
-  log(`  Citas por barbería: ${JSON.stringify((await c.query(`SELECT t.slug, COUNT(*) AS citas FROM ${DB}.appointments a JOIN ${DB}.tenants t ON t.id = a.tenant_id GROUP BY t.slug ORDER BY t.slug`))[0])}`);
+  const one = async (sql) => (await c.query(sql)).rows[0];
+  check('sin citas solapadas en ningún barbero', Number((await one(`SELECT COUNT(*) AS n FROM reservas.appointments a JOIN reservas.appointments b ON a.barber_id = b.barber_id AND a.id < b.id AND a.starts_at < b.ends_at AND a.ends_at > b.starts_at WHERE a.status IN ('PENDING','CONFIRMED','COMPLETED') AND b.status IN ('PENDING','CONFIRMED','COMPLETED')`)).n) === 0,
+    `${(await one(`SELECT COUNT(*) AS n FROM reservas.appointments a JOIN reservas.appointments b ON a.barber_id = b.barber_id AND a.id < b.id AND a.starts_at < b.ends_at AND a.ends_at > b.starts_at WHERE a.status IN ('PENDING','CONFIRMED','COMPLETED') AND b.status IN ('PENDING','CONFIRMED','COMPLETED')`)).n} pares solapados`);
+  check('cita, barbero y servicio siempre de la misma barbería', Number((await one(`SELECT COUNT(*) AS n FROM reservas.appointments a JOIN reservas.barbers b ON b.id = a.barber_id JOIN reservas.services s ON s.id = a.service_id WHERE a.tenant_id <> b.tenant_id OR a.tenant_id <> s.tenant_id`)).n) === 0);
+  check('reseñas, notificaciones y recordatorios en la barbería de su cita', Number((await one(`SELECT (SELECT COUNT(*) FROM reservas.reviews r JOIN reservas.appointments a ON a.id = r.appointment_id WHERE r.tenant_id <> a.tenant_id) + (SELECT COUNT(*) FROM reservas.notifications n JOIN reservas.appointments a ON a.id = n.appointment_id WHERE n.tenant_id <> a.tenant_id) + (SELECT COUNT(*) FROM reservas.reminder_jobs r JOIN reservas.appointments a ON a.id = r.appointment_id WHERE r.tenant_id <> a.tenant_id) AS n`)).n) === 0);
+  check('cada comprobante se usó una sola vez', Number((await one(`SELECT COUNT(*) AS n FROM (SELECT payment_proof_url FROM reservas.appointments WHERE payment_proof_url IS NOT NULL GROUP BY payment_proof_url HAVING COUNT(DISTINCT payment_reference) > 1) x`)).n) === 0);
+  if (DOCKER_IMAGE) { const logs = spawnSync('docker', ['logs', CONTAINER], { encoding: 'utf8' }); serverLog = logs.stdout + logs.stderr; }
+  log(`  Citas por barbería: ${JSON.stringify((await c.query(`SELECT t.slug, COUNT(*)::int AS citas FROM reservas.appointments a JOIN reservas.tenants t ON t.id = a.tenant_id GROUP BY t.slug ORDER BY t.slug`)).rows)}`);
   const errors = serverLog.split('\n').filter((line) => /error/i.test(line));
   log(`  Líneas de error en el registro del servidor: ${errors.length}${errors.length ? `\n   ${[...new Set(errors)].slice(0, 8).join('\n   ')}` : ''}`);
 
   const summary = report();
-  writeFileSync(process.env.STRESS_OUTPUT || path.join(os.tmpdir(), `estres-${stamp}.json`), JSON.stringify({ phases: summary, checks }, null, 2));
+  writeFileSync(process.env.STRESS_OUTPUT || path.join(os.tmpdir(), `estres-${stamp}.json`), JSON.stringify({ config: { tenants: TENANTS, barbers: TOTAL_BARBERS, servicesPerBarber: SERVICES_PER_BARBER, dayClients: DAY_CLIENTS, docker: DOCKER_IMAGE ?? null, cpus: DOCKER_IMAGE ? CPUS : null, memory: DOCKER_IMAGE ? MEMORY : null, dbLatencyMs: DB_LATENCY_MS }, phases: summary, checks }, null, 2));
   log(`\n================ RESUMEN ================\nComprobaciones: ${checks.filter((item) => item.ok).length}/${checks.length} correctas`);
   for (const item of checks.filter((entry) => !entry.ok)) log(`  ✖ ${item.name} — ${item.detail}`);
   exitCode = checks.every((item) => item.ok) ? 0 : 1;
@@ -369,10 +459,12 @@ try {
 } finally {
   sampling = false;
   server?.kill();
+  latencyProxy?.close();
   await new Promise((resolve) => setTimeout(resolve, 2500));
-  await c.query(`DROP DATABASE IF EXISTS ${DB}`).catch(() => {});
-  await c.query("DROP USER IF EXISTS ?@'%'", [APP_USER]).catch(() => {});
-  await c.end();
+  await c?.end().catch(() => {});
+  await server0.query(`DROP DATABASE IF EXISTS ${DB} WITH (FORCE)`).catch(() => {});
+  await server0.query(`DROP ROLE IF EXISTS ${APP_USER}`).catch(() => {});
+  await server0.end();
   rmSync(uploadsDir, { recursive: true, force: true });
   log(`Base temporal ${DB}, usuario y archivos eliminados.`);
   process.exit(exitCode);

@@ -2,6 +2,16 @@ function hasPlaceholder(value) {
   return !value || /replace-with|changeme|example|default-secret/i.test(value);
 }
 
+function databaseCredentials() {
+  if (!process.env.DATABASE_URL) return { user: process.env.DATABASE_USER, password: process.env.DATABASE_PASSWORD };
+  try {
+    const url = new URL(process.env.DATABASE_URL);
+    return { user: decodeURIComponent(url.username), password: decodeURIComponent(url.password) };
+  } catch {
+    return {};
+  }
+}
+
 function assertProductionConfiguration() {
   if (process.env.NODE_ENV !== 'production') return;
 
@@ -10,8 +20,10 @@ function assertProductionConfiguration() {
   if (hasPlaceholder(jwtSecret) || jwtSecret.length < 32) {
     errors.push('JWT_SECRET debe ser aleatorio y tener al menos 32 caracteres.');
   }
-  if (!process.env.DATABASE_PASSWORD) errors.push('DATABASE_PASSWORD es obligatorio en producción.');
-  if (process.env.DATABASE_USER === 'root') errors.push('DATABASE_USER no puede ser root en producción.');
+  const connection = databaseCredentials();
+  if (!connection.password) errors.push('La contraseña de la base de datos es obligatoria en producción (DATABASE_URL o DATABASE_PASSWORD).');
+  // El usuario del pooler de Supabase es "usuario.ref-del-proyecto".
+  if (/^(postgres|supabase_admin|root)(\.|$)/.test(connection.user ?? '')) errors.push('La API no puede conectarse con un usuario administrador (postgres); usa el usuario propio que crea el migrador.');
 
   const origins = (process.env.FRONTEND_URL ?? '').split(',').map((value) => value.trim()).filter(Boolean);
   if (!origins.length) {

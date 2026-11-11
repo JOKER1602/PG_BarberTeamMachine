@@ -1,9 +1,8 @@
 import { useEffect, useState } from 'react';
 import { api, clearSession, getStoredSession, saveSession } from '../api.js';
-import { brandInitials, brandWords, passwordRecoveryHref, tenantBrand, tenantHref } from '../tenant.js';
+import { brandWords, passwordRecoveryHref, tenantBrand, tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
 
-const weekdays = ['Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado', 'Domingo'];
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const namePattern = /^[\p{L}]+(?:[ '\-][\p{L}]+)*$/u;
 
@@ -67,7 +66,6 @@ export default function ReservationWizard() {
   const [showAuthModal, setShowAuthModal] = useState(reservationParams.get('login') === '1');
   const [showPhoneModal, setShowPhoneModal] = useState(false);
   const [phoneInput, setPhoneInput] = useState('');
-  const [whatsappConsent, setWhatsappConsent] = useState(false);
   const [professionalQuery, setProfessionalQuery] = useState('');
   const [serviceFilter, setServiceFilter] = useState('all');
   const [serviceQuery, setServiceQuery] = useState('');
@@ -204,7 +202,6 @@ export default function ReservationWizard() {
       const savedPhone = normalizedBolivianPhone(result.user.phone);
       const needsPhone = !hasValidBolivianPhone(result.user.phone);
       setPhoneInput(savedPhone);
-      setWhatsappConsent(Boolean(result.user.whatsappConsent));
       setShowPhoneModal(needsPhone);
       if (needsPhone) {
         setNotice('Sesión iniciada. Añade tu teléfono para continuar.');
@@ -222,7 +219,6 @@ export default function ReservationWizard() {
     if (session) {
       const savedPhone = normalizedBolivianPhone(session.phone);
       setPhoneInput(savedPhone);
-      setWhatsappConsent(Boolean(session.whatsappConsent));
       if (hasValidBolivianPhone(session.phone)) {
         setStep(3);
       } else {
@@ -241,7 +237,7 @@ export default function ReservationWizard() {
       return;
     }
     try {
-      const result = await api.updateProfile({ firstName: session.firstName, lastName: session.lastName, phone: `+591 ${phone}`, whatsappConsent });
+      const result = await api.updateProfile({ firstName: session.firstName, lastName: session.lastName, phone: `+591 ${phone}` });
       setSession(result.user);
       saveSession(result);
       setShowPhoneModal(false);
@@ -473,7 +469,6 @@ export default function ReservationWizard() {
         <p>Introduce tu número de teléfono para confirmar la cita.</p>
         <form onSubmit={savePhone}>
           <label>Número de teléfono<div className="phone-field"><span>+591</span><input type="tel" inputMode="numeric" minLength="8" maxLength="12" required autoFocus value={phoneInput} onChange={(event) => { setPhoneInput(event.target.value.replace(/[^0-9]/g, '')); setWhatsappConsent(false); }}/></div></label>
-          <label className="whatsapp-consent"><input type="checkbox" checked={whatsappConsent} onChange={(event) => setWhatsappConsent(event.target.checked)}/><span>Acepto recibir por WhatsApp un recordatorio 2 horas antes de mis citas confirmadas. Puedo desactivarlo en mi perfil.</span></label>
           <button className="wizard-primary">Continuar</button>
         </form>
       </section>

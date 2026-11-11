@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, getStoredSession, logoutToHome, saveSession } from '../api.js';
-import { brandInitials, brandWords, tenantBrand, tenantHref } from '../tenant.js';
+import { tenantBrand, tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
 import RequiredPasswordChange from '../components/RequiredPasswordChange.jsx';
 
@@ -146,7 +146,8 @@ function AdminPanel({ services, barbers, categories, reloadCatalog }) {
   const clients = users.filter((user) => user.role === 'CLIENTE');
   const accountableBarbers = barbers.filter((item) => !item.userId);
   const metrics = dashboard?.metrics ?? {};
-  const paymentReviews = Object.values(appointments.filter((item) => item.paymentProofUrl).reduce((groups, item) => {
+  // Los comprobantes se borran tras unos días; el pago (monto y referencia) se conserva.
+  const paymentReviews = Object.values(appointments.filter((item) => item.paymentProofUrl || item.paymentAmount != null).reduce((groups, item) => {
     const key = item.paymentReference || `appointment-${item.id}`;
     if (!groups[key]) groups[key] = { ...item, services: [] };
     groups[key].services.push(item.serviceName);
@@ -166,7 +167,7 @@ function AdminPanel({ services, barbers, categories, reloadCatalog }) {
 
     {activeTab === 'agenda' && <div className="admin-agenda-layout"><section className="admin-card"><div className="admin-card-heading"><div><h3>Agenda centralizada</h3><p>{appointments.length} cita(s) encontradas.</p></div></div><div className="admin-appointment-list">{appointments.length ? appointments.map((item) => <article key={item.id}><time><b>{new Date(item.startsAt).toLocaleDateString('es-BO', { day: '2-digit', month: 'short' })}</b><span>{new Date(item.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</span></time><div><strong>{item.clientName}</strong><p>{item.serviceName} · {item.barberName}</p>{item.cancellationReason && <p className="appointment-note cancellation"><b>Motivo de cancelación:</b> {item.cancellationReason}</p>}</div><span className={`admin-status ${item.status.toLowerCase()}`}>{statusLabels[item.status]}</span><div className="admin-appointment-actions">{item.status === 'CONFIRMED' && <><button onClick={() => updateStatus(item.id, 'COMPLETED')}>Atendida</button><button onClick={() => updateStatus(item.id, 'NO_SHOW')}>No asistió</button><button className="danger" onClick={() => updateStatus(item.id, 'CANCELLED')}>Cancelar</button><button className="quiet" onClick={() => setReschedule({ id: item.id, startsAt: new Date(item.startsAt).toISOString().slice(0, 16) })}>Reprogramar</button></>}{item.status === 'PENDING' && item.paymentProofUrl && <small className="payment-awaiting">Esperando revisión del comprobante.</small>}</div><div className="admin-note-editor"><label>Nota interna<textarea value={adminNoteDrafts[item.id] ?? item.adminNotes ?? ''} onChange={(event) => setAdminNoteDrafts({ ...adminNoteDrafts, [item.id]: event.target.value })} placeholder="Solo visible para administración y barbero."/></label><button className="quiet" onClick={() => saveAdminNote(item.id)}>Guardar nota</button></div></article>) : <p className="admin-empty">No hay citas con estos filtros.</p>}</div></section>{reschedule.id && <aside className="admin-card reschedule-card"><h3>Reprogramar cita</h3><p>Solo las citas confirmadas pueden reprogramarse.</p><form onSubmit={reprogramAppointment}><input type="datetime-local" required value={reschedule.startsAt} onChange={(event) => setReschedule({ ...reschedule, startsAt: event.target.value })}/><button>Guardar nueva fecha</button><button type="button" className="quiet" onClick={() => setReschedule({ id: '', startsAt: '' })}>Cancelar</button></form></aside>}</div>}
 
-    {activeTab === 'pagos' && <section className="admin-card payment-review-list"><p className="section-label">Cobros</p><h3>Comprobantes y pagos</h3><p>Consulta pagos pendientes e historial de comprobantes aprobados, rechazados o asociados a citas ya atendidas.</p><div className="payment-view-tabs" role="tablist" aria-label="Vista de pagos"><button type="button" role="tab" aria-selected={paymentView === 'pending'} className={paymentView === 'pending' ? 'active' : ''} onClick={() => setPaymentView('pending')}>Pendientes <b>{pendingPaymentReviews.length}</b></button><button type="button" role="tab" aria-selected={paymentView === 'history'} className={paymentView === 'history' ? 'active' : ''} onClick={() => setPaymentView('history')}>Historial <b>{paymentReviews.length - pendingPaymentReviews.length}</b></button></div>{visiblePaymentReviews.length ? visiblePaymentReviews.map((payment) => <article key={`payment-${payment.paymentReference ?? payment.id}`}><div><b>{payment.clientName} · {payment.services.join(' + ')}</b><span>Bs {Number(payment.paymentAmount ?? 0).toFixed(0)} · {new Date(payment.startsAt).toLocaleString('es-BO')} · {payment.services.length} servicio(s)</span></div><span className={`payment-history-status ${payment.status.toLowerCase()}`}>{statusLabels[payment.status]}</span><button className="quiet payment-proof-trigger" type="button" onClick={() => setPaymentProofPreview(payment)}>Ver comprobante</button>{paymentView === 'pending' && <><button onClick={() => updateStatus(payment.id, 'CONFIRMED')}>Aprobar pago</button><button className="danger" onClick={() => updateStatus(payment.id, 'CANCELLED', 'Pago rechazado')}>Rechazar pago</button></>}</article>) : <p className="admin-empty">{paymentView === 'pending' ? 'No hay comprobantes pendientes de revisión.' : 'Aún no hay pagos revisados en el historial.'}</p>}</section>}
+    {activeTab === 'pagos' && <section className="admin-card payment-review-list"><p className="section-label">Cobros</p><h3>Comprobantes y pagos</h3><p>Consulta pagos pendientes e historial de comprobantes aprobados, rechazados o asociados a citas ya atendidas.</p><div className="payment-view-tabs" role="tablist" aria-label="Vista de pagos"><button type="button" role="tab" aria-selected={paymentView === 'pending'} className={paymentView === 'pending' ? 'active' : ''} onClick={() => setPaymentView('pending')}>Pendientes <b>{pendingPaymentReviews.length}</b></button><button type="button" role="tab" aria-selected={paymentView === 'history'} className={paymentView === 'history' ? 'active' : ''} onClick={() => setPaymentView('history')}>Historial <b>{paymentReviews.length - pendingPaymentReviews.length}</b></button></div>{visiblePaymentReviews.length ? visiblePaymentReviews.map((payment) => <article key={`payment-${payment.paymentReference ?? payment.id}`}><div><b>{payment.clientName} · {payment.services.join(' + ')}</b><span>Bs {Number(payment.paymentAmount ?? 0).toFixed(0)} · {new Date(payment.startsAt).toLocaleString('es-BO')} · {payment.services.length} servicio(s)</span></div><span className={`payment-history-status ${payment.status.toLowerCase()}`}>{statusLabels[payment.status]}</span>{payment.paymentProofUrl ? <button className="quiet payment-proof-trigger" type="button" onClick={() => setPaymentProofPreview(payment)}>Ver comprobante</button> : <small className="payment-proof-expired">Comprobante eliminado por antigüedad</small>}{paymentView === 'pending' && <><button onClick={() => updateStatus(payment.id, 'CONFIRMED')}>Aprobar pago</button><button className="danger" onClick={() => updateStatus(payment.id, 'CANCELLED', 'Pago rechazado')}>Rechazar pago</button></>}</article>) : <p className="admin-empty">{paymentView === 'pending' ? 'No hay comprobantes pendientes de revisión.' : 'Aún no hay pagos revisados en el historial.'}</p>}</section>}
 
     {activeTab === 'servicios' && <div className="services-management">
       <section className="admin-card services-overview">
@@ -238,19 +239,6 @@ function AdminBarberPerformance({ data }) {
 
 function RecurringClients({ data }) {
   return <section className="admin-card admin-recurring"><h3>Clientes recurrentes</h3>{data.length ? data.map((item) => <article key={item.id}><span>{item.name.split(' ').map((name) => name[0]).join('').slice(0, 2)}</span><div><b>{item.name}</b><small>{item.total} reservas · última: {new Date(item.lastVisit).toLocaleDateString('es-BO')}</small></div></article>) : <p className="admin-empty">Aún no hay clientes con dos o más reservas.</p>}</section>;
-}
-
-function ActionIcon({ name }) {
-  const paths = {
-    calendar: <><rect x="3" y="5" width="18" height="16" rx="3"/><path d="M7 3v4M17 3v4M3 10h18M8 14h3M8 17h3"/></>,
-    directions: <><path d="M12 21s7-5.1 7-11A7 7 0 0 0 5 10c0 5.9 7 11 7 11Z"/><circle cx="12" cy="10" r="2.3"/></>,
-    location: <><path d="M4 7.5 12 4l8 3.5-8 3-8-3Z"/><path d="m4 12 8 3 8-3M4 16.5l8 3 8-3"/></>,
-    edit: <><path d="m4 16.5-.8 3.3 3.3-.8L18 7.5l-2.6-2.6L4 16.5Z"/><path d="m13.8 6.5 2.6 2.6"/></>,
-    cancel: <><circle cx="12" cy="12" r="8.5"/><path d="m9 9 6 6m0-6-6 6"/></>,
-    repeat: <><path d="M19 8V4l2.7 2.7L19 9.4V8h-7a4 4 0 1 0 3.5 5.9"/><path d="M5 16v4l-2.7-2.7L5 14.6V16h7a4 4 0 1 0-3.5-5.9"/></>,
-    star: <path d="m12 3 2.7 5.5 6.1.9-4.4 4.3 1 6.1-5.4-2.8-5.4 2.8 1-6.1-4.4-4.3 6.1-.9L12 3Z"/>
-  };
-  return <svg className="action-icon" viewBox="0 0 24 24" aria-hidden="true">{paths[name]}</svg>;
 }
 
 export default function AdminPortal() {

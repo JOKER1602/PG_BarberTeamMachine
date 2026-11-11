@@ -54,7 +54,7 @@ class OwnerError extends Error {
 // Reutiliza la cuenta del dueño (las cuentas son globales) o crea una de
 // cliente con contraseña temporal obligatoria.
 async function resolveOwner(connection, owner) {
-  const [users] = await connection.execute('SELECT id, is_active AS isActive FROM users WHERE email = ? FOR UPDATE', [owner.email]);
+  const [users] = await connection.execute('SELECT id, is_active AS "isActive" FROM users WHERE email = ? FOR UPDATE', [owner.email]);
   if (users[0]) {
     if (!users[0].isActive) throw new OwnerError(409, 'La cuenta del dueño está desactivada');
     return { ownerId: users[0].id, ownerCreated: false };
@@ -64,7 +64,7 @@ async function resolveOwner(connection, owner) {
   }
   const [created] = await connection.execute(
     `INSERT INTO users (role_id, first_name, last_name, email, password_hash, must_change_password)
-     SELECT id, ?, ?, ?, ?, TRUE FROM roles WHERE name = 'CLIENTE'`,
+     SELECT id, ?, ?, ?, ?, TRUE FROM roles WHERE name = 'CLIENTE' RETURNING id`,
     [owner.firstName, owner.lastName, owner.email, await bcrypt.hash(owner.temporaryPassword, 12)]
   );
   return { ownerId: created.insertId, ownerCreated: true };
@@ -79,12 +79,12 @@ function invalid(response, parsed, message) {
 router.get('/tenants', async (_request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT t.slug, t.display_name AS displayName, t.legal_name AS legalName, t.status, t.created_at AS createdAt,
+      `SELECT t.slug, t.display_name AS "displayName", t.legal_name AS "legalName", t.status, t.created_at AS "createdAt",
               ts.city,
-              (SELECT GROUP_CONCAT(u.email ORDER BY u.email SEPARATOR ', ')
+              (SELECT string_agg(u.email, ', ' ORDER BY u.email)
                  FROM tenant_memberships m JOIN users u ON u.id = m.user_id
                 WHERE m.tenant_id = t.id AND m.role = 'OWNER' AND m.is_active = TRUE) AS owners,
-              (SELECT COUNT(*) FROM barbers b WHERE b.tenant_id = t.id AND b.is_active = TRUE) AS activeBarbers,
+              (SELECT COUNT(*) FROM barbers b WHERE b.tenant_id = t.id AND b.is_active = TRUE) AS "activeBarbers",
               (SELECT COUNT(*) FROM appointments a WHERE a.tenant_id = t.id) AS appointments
        FROM tenants t LEFT JOIN tenant_settings ts ON ts.tenant_id = t.id
        ORDER BY t.created_at DESC`
@@ -130,7 +130,7 @@ router.post('/tenants', async (request, response, next) => {
   } catch (error) {
     await connection.rollback();
     if (error instanceof OwnerError) return response.status(error.status).json({ message: error.message });
-    if (error.code === 'ER_DUP_ENTRY') return response.status(409).json({ message: 'Ya existe una barbería con ese identificador' });
+    if (error.code === '23505') return response.status(409).json({ message: 'Ya existe una barbería con ese identificador' });
     return next(error);
   } finally { connection.release(); }
 });
@@ -148,7 +148,7 @@ router.patch('/tenants/:slug', async (request, response, next) => {
       [...keys.map((key) => parsed.data[key]), slug.data]
     );
     if (!result.affectedRows) return response.status(404).json({ message: 'Barbería no encontrada' });
-    const [[tenant]] = await pool.execute('SELECT slug, display_name AS displayName, legal_name AS legalName, status FROM tenants WHERE slug = ?', [slug.data]);
+    const [[tenant]] = await pool.execute('SELECT slug, display_name AS "displayName", legal_name AS "legalName", status FROM tenants WHERE slug = ?', [slug.data]);
     return response.json({ tenant, message: 'Barbería actualizada' });
   } catch (error) { return next(error); }
 });
@@ -169,7 +169,7 @@ router.post('/tenants/:slug/owners', async (request, response, next) => {
     const { ownerId, ownerCreated } = await resolveOwner(connection, parsed.data);
     await connection.execute(
       `INSERT INTO tenant_memberships (tenant_id, user_id, role, is_active) VALUES (?, ?, 'OWNER', TRUE)
-       ON DUPLICATE KEY UPDATE role = 'OWNER', is_active = TRUE`,
+       ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = 'OWNER', is_active = TRUE`,
       [tenant.id, ownerId]
     );
     await connection.commit();

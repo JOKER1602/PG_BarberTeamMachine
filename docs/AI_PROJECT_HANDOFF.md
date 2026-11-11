@@ -2,6 +2,12 @@
 
 > **Propósito de este documento:** permitir que otra IA, desarrollador o revisor comprenda el proyecto sin conocer la conversación previa. Describe el estado real del repositorio al 5 de noviembre de 2026. No contiene secretos, contraseñas, tokens, correos privados ni datos de prueba sensibles.
 
+> **Actualización 11 de noviembre de 2026 (rama `supabase/postgres`):** la base de datos pasó de MySQL a **PostgreSQL en Supabase**. Donde este documento diga MySQL, léase PostgreSQL; las migraciones vigentes están en `database/postgres/`; las antiguas de MySQL se eliminaron y siguen en el historial de git. Ver la sección «Migración a PostgreSQL» al final.
+>
+> **Asistente de reservas retirado (11 de noviembre de 2026):** por decisión del negocio no va a producción. Se eliminaron la ruta `/assistant/query`, `services/booking-assistant.js`, su sección en `BookingPage.jsx`, su CSS y sus pruebas. Las menciones al asistente en este documento son históricas. Las recomendaciones (`/recommendations`) se mantienen.
+>
+> **Recordatorios por WhatsApp retirados (11 de noviembre de 2026):** no van a producción. Se eliminaron `services/whatsapp.js`, el consentimiento de WhatsApp del perfil y la reserva, los trabajos `WHATSAPP` y la columna `users.whatsapp_opt_in_at` (migración `003_remove_whatsapp_reminders.sql`). Los recordatorios son por correo (24 h y 2 h antes) y dentro de la plataforma. El número de WhatsApp de contacto de cada barbería (`tenant_settings.whatsapp`) se mantiene.
+
 ## 1. Resumen ejecutivo
 
 **Empyrean Studio** es un sistema web de reservas para barberías. Permite que clientes consulten servicios y profesionales, elijan una fecha/hora realmente disponible, paguen un anticipo mediante QR, suban un comprobante y reciban la confirmación después de una revisión administrativa. Incluye áreas diferenciadas para cliente, barbero y administrador, recordatorios, reseñas, recomendaciones deterministas, asistente de reservas, analítica y reportes.
@@ -29,7 +35,7 @@ El sistema centraliza:
 |---|---|
 | Frontend | React + Vite + CSS propio en `frontend/` |
 | Backend | Node.js + Express en `backend/` |
-| Base de datos | MySQL 8+; scripts en `database/` |
+| Base de datos | PostgreSQL (Supabase), esquema privado `reservas`; migraciones en `database/postgres/` |
 | Autenticación | JWT firmado, guardado exclusivamente en cookie `HttpOnly` |
 | Archivos actuales | Disco local `backend/uploads/` (transitorio; no apto para SaaS escalable) |
 | Correo | Nodemailer / SMTP para recuperación y recordatorios |
@@ -87,7 +93,7 @@ No se usa React Router. `frontend/src/App.jsx` decide qué página mostrar media
 | Ruta | Página | Finalidad |
 |---|---|---|
 | `/t/:slug` | `HomePage.jsx` | Inicio público, servicios, información, login/registro modal |
-| `/t/:slug/reservar` | `BookingPage.jsx` | Catálogo público, equipo, asistente y acceso a reserva |
+| `/t/:slug/reservar` | `BookingPage.jsx` | Catálogo público, equipo y acceso a reserva |
 | `/t/:slug/reservar/cita` | `ReservationWizard.jsx` | Flujo de reserva: servicio, profesional, fecha/hora, QR y confirmación |
 | `/t/:slug/mi-cuenta?tab=historial` | `ClientArea.jsx` | Perfil, próximas citas, historial, reseñas y cambios permitidos |
 | `/t/:slug/admin` | `AdminPortal.jsx` | Administración de esa barbería (OWNER/ADMIN) |
@@ -250,7 +256,6 @@ Base local: `http://localhost:3002/api`.
 | Reviews | `/reviews` | listar y crear reseñas verificadas |
 | Notifications | `/notifications` | bandeja y lectura |
 | Recommendations | `/recommendations` | sugerencias personalizadas |
-| Assistant | `/assistant/query` | consulta en lenguaje natural |
 
 Los handlers están en `backend/src/routes/`. Para una lista exacta de verbos y rutas, revisar las declaraciones `router.get/post/patch/put/delete` de esos archivos.
 
@@ -527,6 +532,15 @@ Guía: **[DEPLOY_RAILWAY.md](DEPLOY_RAILWAY.md)**. Decisiones tomadas tras revis
 - Correo por API HTTPS (`RESEND_API_KEY` o `BREVO_API_KEY`, `services/email.js#sendEmail`): Railway bloquea SMTP en Free/Trial/Hobby.
 - `CLIENT_IP_HEADER=x-real-ip` para el límite de intentos (la cantidad de saltos del proxy de Railway no está documentada).
 - `RAILWAY_RUN_UID=0` porque la imagen corre como `node` y el volumen se monta como root.
+
+### Migración a PostgreSQL (11 de noviembre de 2026)
+
+- `backend/src/config/database.js` usa `pg` y conserva la interfaz `pool.execute/query/getConnection` con parámetros `?`. Los alias camelCase van entre comillas dobles; los INSERT cuyo id se usa llevan `RETURNING id`.
+- Tablas en el esquema privado `reservas`: Supabase expone `public` por REST. No moverlas.
+- Candado por barbero: `pg_advisory_xact_lock` (de transacción). Worker de recordatorios: candado de sesión, por eso se usa el pooler en **modo sesión**.
+- Códigos de error: `23505` (duplicado), `40P01` (deadlock), `55P03` (lock_timeout).
+- Fechas en `TIMESTAMPTZ`; los parámetros de fecha se envían en ISO con Z.
+- `npm run test:routes` recorre las 58 rutas contra PostgreSQL real; imprescindible al tocar SQL, porque PostgreSQL rechaza tipos y alias solo al ejecutar.
 
 ### Instrucción breve para la siguiente IA
 

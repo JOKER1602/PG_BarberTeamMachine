@@ -53,7 +53,7 @@ Más adelante, `slug.tudominio.com` podrá apuntar a las mismas rutas. El slug s
 
 ## Migración de Empyrean Studio
 
-1. Respaldar MySQL y los archivos `uploads/`.
+1. Respaldar la base de datos y los archivos `uploads/`.
 2. Crear `tenants`, `tenant_memberships`, `tenant_settings` y el tenant inicial `empyrean-studio`.
 3. Agregar `tenant_id` a servicios, barberos, citas, bloqueos, reseñas, recordatorios, comprobantes y notificaciones.
 4. Migrar todos los registros existentes a Empyrean Studio.

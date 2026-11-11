@@ -29,7 +29,7 @@ async function categoryExists(tenantId, categoryId) {
 }
 
 function duplicateNameResponse(error, response, label) {
-  if (error.code !== 'ER_DUP_ENTRY') return false;
+  if (error.code !== '23505') return false;
   response.status(409).json({ message: `Ya existe ${label} con ese nombre en esta barbería` });
   return true;
 }
@@ -37,7 +37,7 @@ function duplicateNameResponse(error, response, label) {
 router.get('/categories', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      'SELECT id, name, slug, description, sort_order AS sortOrder FROM service_categories WHERE tenant_id = ? AND is_active = TRUE ORDER BY sort_order, name',
+      'SELECT id, name, slug, description, sort_order AS "sortOrder" FROM service_categories WHERE tenant_id = ? AND is_active = TRUE ORDER BY sort_order, name',
       [tenantIdOf(request)]
     );
     return response.json({ categories: rows });
@@ -49,7 +49,7 @@ router.post('/categories', ...requireTenantAdmin, async (request, response, next
   if (!parsed.success) return response.status(400).json({ message: 'Datos de categoría inválidos' });
   try {
     const [result] = await pool.execute(
-      'INSERT INTO service_categories (tenant_id, name, slug, description) VALUES (?, ?, ?, ?)',
+      'INSERT INTO service_categories (tenant_id, name, slug, description) VALUES (?, ?, ?, ?) RETURNING id',
       [tenantIdOf(request), parsed.data.name, parsed.data.slug, parsed.data.description ?? null]
     );
     return response.status(201).json({ id: result.insertId, message: 'Categoría creada' });
@@ -62,8 +62,8 @@ router.post('/categories', ...requireTenantAdmin, async (request, response, next
 router.get('/', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT s.id, s.category_id AS categoryId, c.name AS categoryName, c.slug AS categorySlug,
-       s.name, s.description, s.price, s.duration_minutes AS durationMinutes
+      `SELECT s.id, s.category_id AS "categoryId", c.name AS "categoryName", c.slug AS "categorySlug",
+       s.name, s.description, s.price, s.duration_minutes AS "durationMinutes"
        FROM services s JOIN service_categories c ON c.id = s.category_id AND c.tenant_id = s.tenant_id
        WHERE s.tenant_id = ? AND s.is_active = TRUE ORDER BY c.sort_order, s.name`,
       [tenantIdOf(request)]
@@ -77,8 +77,8 @@ router.get('/', async (request, response, next) => {
 router.get('/admin', ...requireTenantAdmin, async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT s.id, s.category_id AS categoryId, c.name AS categoryName, c.slug AS categorySlug,
-       s.name, s.description, s.price, s.duration_minutes AS durationMinutes, s.is_active AS isActive
+      `SELECT s.id, s.category_id AS "categoryId", c.name AS "categoryName", c.slug AS "categorySlug",
+       s.name, s.description, s.price, s.duration_minutes AS "durationMinutes", s.is_active AS "isActive"
        FROM services s JOIN service_categories c ON c.id = s.category_id AND c.tenant_id = s.tenant_id
        WHERE s.tenant_id = ? ORDER BY c.sort_order, s.name`,
       [tenantIdOf(request)]
@@ -98,7 +98,7 @@ router.post('/', ...requireTenantAdmin, async (request, response, next) => {
     const { name, description, price, durationMinutes, categoryId } = parsed.data;
     if (!await categoryExists(tenantId, categoryId)) return response.status(400).json({ message: 'La categoría seleccionada no está disponible' });
     const [result] = await pool.execute(
-      `INSERT INTO services (tenant_id, category_id, name, description, price, duration_minutes) VALUES (?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO services (tenant_id, category_id, name, description, price, duration_minutes) VALUES (?, ?, ?, ?, ?, ?) RETURNING id`,
       [tenantId, categoryId, name, description ?? null, price, durationMinutes]
     );
     return response.status(201).json({ id: result.insertId, message: 'Servicio creado' });

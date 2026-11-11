@@ -109,7 +109,7 @@ test('asigna un dueño a una barbería existente sin duplicar la membresía', as
     assert.equal(result.body.owner.accountCreated, false);
     const membership = db.calls.find((call) => call.sql.includes('INSERT INTO tenant_memberships'));
     assert.deepEqual(membership.values, ['tenant-empyrean', 40]);
-    assert.match(membership.sql, /ON DUPLICATE KEY UPDATE role = 'OWNER'/);
+    assert.ok(membership.sql.includes("ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = 'OWNER'"));
   } finally { Object.assign(pool, original); }
   assert.equal((await run('/tenants/:slug/owners', 'post', { params: { slug: 'no-existe' }, body: { email: 'a@b.test' } })).status, 404);
   assert.equal((await run('/tenants/:slug/owners', 'post', { params: { slug: 'empyrean-studio' }, body: { email: 'nuevo@b.test' } })).status, 404, 'sin barbería simulada responde 404');

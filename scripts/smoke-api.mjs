@@ -14,14 +14,6 @@ const checks = [
     validate: (body) => typeof body?.message === 'string'
   },
   {
-    name: 'el asistente valida consultas vacías o demasiado cortas',
-    path: '/assistant/query',
-    method: 'POST',
-    body: { query: 'x' },
-    expectedStatus: 400,
-    validate: (body) => typeof body?.message === 'string'
-  },
-  {
     name: 'el panel administrativo exige autenticación',
     path: '/admin/dashboard',
     expectedStatus: 401,

@@ -8,7 +8,7 @@ const activeStatuses = ['PENDING', 'CONFIRMED'];
 // de otra barbería se comporta como si no existiera.
 
 export function sqlDateTime(date) {
-  return date.toISOString().slice(0, 19).replace('T', ' ');
+  return date.toISOString();
 }
 
 export async function loadAvailability(connection, tenantId, barberId, serviceId, startAt, endAt) {
@@ -16,7 +16,7 @@ export async function loadAvailability(connection, tenantId, barberId, serviceId
   // El profesional debe estar activo: uno desactivado no recibe reservas
   // nuevas aunque alguien conozca su id.
   const [serviceRows] = await connection.execute(
-    `SELECT s.id, s.duration_minutes AS durationMinutes, s.price
+    `SELECT s.id, s.duration_minutes AS "durationMinutes", s.price
      FROM services s
      JOIN barber_services bs ON bs.service_id = s.id AND bs.tenant_id = s.tenant_id
      JOIN barbers b ON b.id = bs.barber_id AND b.tenant_id = s.tenant_id AND b.is_active = TRUE
@@ -26,8 +26,8 @@ export async function loadAvailability(connection, tenantId, barberId, serviceId
   if (serviceRows.length === 0) return { service: null, workingHours: [], blocks: [], appointments: [] };
 
   const [workingHours] = await connection.execute(
-    `SELECT weekday, TIME_TO_SEC(start_time) DIV 60 AS start_minutes,
-            TIME_TO_SEC(end_time) DIV 60 AS end_minutes
+    `SELECT weekday, (EXTRACT(EPOCH FROM start_time)::int / 60) AS start_minutes,
+            (EXTRACT(EPOCH FROM end_time)::int / 60) AS end_minutes
      FROM barber_working_hours
      WHERE tenant_id = ? AND barber_id = ? AND weekday = ? AND is_active = TRUE`,
     [tenantId, barberId, weekday]
@@ -37,12 +37,19 @@ export async function loadAvailability(connection, tenantId, barberId, serviceId
      WHERE tenant_id = ? AND barber_id = ? AND starts_at < ? AND ends_at > ?`,
     [tenantId, barberId, sqlDateTime(endAt), sqlDateTime(startAt)]
   );
-  const [appointments] = await connection.execute(
+  const appointments = await loadActiveAppointments(connection, tenantId, barberId, startAt, endAt);
+  return { service: serviceRows[0], workingHours, blocks, appointments };
+}
+
+// Citas activas del barbero que se cruzan con el intervalo. Es lo único que debe
+// leerse con el turno del barbero tomado para garantizar que no haya solapes.
+export async function loadActiveAppointments(executor, tenantId, barberId, startAt, endAt) {
+  const [appointments] = await executor.execute(
     `SELECT id, starts_at, ends_at FROM appointments
      WHERE tenant_id = ? AND barber_id = ? AND status IN (?, ?) AND starts_at < ? AND ends_at > ?`,
     [tenantId, barberId, ...activeStatuses, sqlDateTime(endAt), sqlDateTime(startAt)]
   );
-  return { service: serviceRows[0], workingHours, blocks, appointments };
+  return appointments;
 }
 
 export async function loadMultiAvailability(connection, tenantId, barberId, serviceIds, startAt, endAt) {
@@ -51,7 +58,7 @@ export async function loadMultiAvailability(connection, tenantId, barberId, serv
   if (!base.service) return { ...base, services: null, durationMinutes: 0 };
   const placeholders = uniqueServiceIds.map(() => '?').join(', ');
   const [services] = await connection.execute(
-    `SELECT s.id, s.duration_minutes AS durationMinutes, s.price
+    `SELECT s.id, s.duration_minutes AS "durationMinutes", s.price
      FROM services s JOIN barber_services bs ON bs.service_id = s.id AND bs.tenant_id = s.tenant_id
      WHERE s.tenant_id = ? AND s.id IN (${placeholders}) AND s.is_active = TRUE AND bs.barber_id = ?`,
     [tenantId, ...uniqueServiceIds, barberId]

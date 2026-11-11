@@ -1,0 +1,69 @@
+# Respaldo diario de la base (esquema reservas de Supabase), CIFRADO.
+#
+# El repositorio es público: cualquiera con cuenta de GitHub puede descargar los
+# artefactos, por eso el respaldo se cifra con AES-256 antes de subirse. Sin la
+# clave BACKUP_ENCRYPTION_KEY el archivo no sirve de nada.
+#
+# Secretos necesarios (Settings → Secrets and variables → Actions):
+#   SUPABASE_BACKUP_DATABASE_URL  conexión de administrador (la de MIGRATION_DATABASE_URL)
+#   BACKUP_ENCRYPTION_KEY         clave larga y aleatoria; guárdala también fuera de GitHub
+#
+# Restaurar: ver docs/DEPLOY_RAILWAY.md, sección «Respaldos».
+name: Respaldo diario de la base
+
+on:
+  schedule:
+    - cron: '0 7 * * *' # 03:00 en Bolivia
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: respaldo-diario
+  cancel-in-progress: false
+
+jobs:
+  respaldo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Comprobar secretos
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_BACKUP_DATABASE_URL }}
+          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+        run: |
+          test -n "$DATABASE_URL" || { echo "::error::Falta el secreto SUPABASE_BACKUP_DATABASE_URL"; exit 1; }
+          test ${#BACKUP_ENCRYPTION_KEY} -ge 32 || { echo "::error::BACKUP_ENCRYPTION_KEY falta o tiene menos de 32 caracteres"; exit 1; }
+
+      # pg_dump debe ser de la misma versión que el servidor o mayor (Supabase usa PostgreSQL 17).
+      - name: Instalar pg_dump 17
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq postgresql-common
+          sudo /usr/share/postgresql-common/pgdg/apt.postgresql.org.sh -y
+          sudo apt-get install -y -qq postgresql-client-17
+
+      - name: Respaldar el esquema reservas
+        env:
+          DATABASE_URL: ${{ secrets.SUPABASE_BACKUP_DATABASE_URL }}
+          PGSSLMODE: require
+        run: |
+          /usr/lib/postgresql/17/bin/pg_dump "$DATABASE_URL" --schema=reservas --format=custom --no-owner --no-privileges --file=respaldo.dump
+          /usr/lib/postgresql/17/bin/pg_restore --list respaldo.dump > /dev/null
+          echo "Respaldo de $(du -h respaldo.dump | cut -f1) verificado."
+
+      - name: Cifrar el respaldo
+        env:
+          BACKUP_ENCRYPTION_KEY: ${{ secrets.BACKUP_ENCRYPTION_KEY }}
+        run: |
+          openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -in respaldo.dump -out "respaldo-$(date -u +%Y-%m-%d).dump.enc" -pass env:BACKUP_ENCRYPTION_KEY
+          shred -u respaldo.dump
+
+      - name: Guardar el respaldo cifrado (30 días)
+        uses: actions/upload-artifact@v4
+        with:
+          name: respaldo-${{ github.run_id }}
+          path: respaldo-*.dump.enc
+          retention-days: 30
+          if-no-files-found: error

@@ -38,8 +38,8 @@ function barberNotFound(response) {
 router.get('/', async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT b.id, b.display_name AS displayName, b.bio, b.photo_url AS photoUrl,
-              GROUP_CONCAT(s.name ORDER BY s.name SEPARATOR ', ') AS services
+      `SELECT b.id, b.display_name AS "displayName", b.bio, b.photo_url AS "photoUrl",
+              string_agg(s.name, ', ' ORDER BY s.name) AS services
        FROM barbers b
        LEFT JOIN barber_services bs ON bs.barber_id = b.id AND bs.tenant_id = b.tenant_id
        LEFT JOIN services s ON s.id = bs.service_id AND s.tenant_id = b.tenant_id AND s.is_active = TRUE
@@ -55,8 +55,8 @@ router.get('/', async (request, response, next) => {
 router.get('/admin', ...requireTenantAdmin, async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT b.id, b.user_id AS userId, b.display_name AS displayName, b.bio, b.photo_url AS photoUrl, b.is_active AS isActive,
-       GROUP_CONCAT(bs.service_id ORDER BY bs.service_id) AS serviceIds
+      `SELECT b.id, b.user_id AS "userId", b.display_name AS "displayName", b.bio, b.photo_url AS "photoUrl", b.is_active AS "isActive",
+       string_agg(bs.service_id::text, ',' ORDER BY bs.service_id) AS "serviceIds"
        FROM barbers b LEFT JOIN barber_services bs ON bs.barber_id = b.id AND bs.tenant_id = b.tenant_id
        WHERE b.tenant_id = ?
        GROUP BY b.id ORDER BY b.display_name`,
@@ -74,7 +74,7 @@ router.post('/', ...requireTenantAdmin, async (request, response, next) => {
 
   try {
     const [result] = await pool.execute(
-      'INSERT INTO barbers (tenant_id, display_name, bio) VALUES (?, ?, ?)',
+      'INSERT INTO barbers (tenant_id, display_name, bio) VALUES (?, ?, ?) RETURNING id',
       [tenantIdOf(request), parsed.data.displayName, parsed.data.bio ?? null]
     );
     return response.status(201).json({ id: result.insertId, message: 'Barbero creado' });
@@ -93,7 +93,7 @@ router.patch('/:id', ...requireTenantAdmin, async (request, response, next) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    const [barberRows] = await connection.execute('SELECT user_id AS userId, is_active AS isActive FROM barbers WHERE id = ? AND tenant_id = ? FOR UPDATE', [id.data, tenantId]);
+    const [barberRows] = await connection.execute('SELECT user_id AS "userId", is_active AS "isActive" FROM barbers WHERE id = ? AND tenant_id = ? FOR UPDATE', [id.data, tenantId]);
     if (!barberRows.length) { await connection.rollback(); return barberNotFound(response); }
     if (!barberRows[0].isActive && (parsed.data.isActive !== true || keys.length > 1)) {
       await connection.rollback();
@@ -104,7 +104,7 @@ router.patch('/:id', ...requireTenantAdmin, async (request, response, next) => {
     if (parsed.data.isActive === false && barberRows[0].isActive) {
       const [[pending]] = await connection.execute(
         `SELECT COUNT(*) AS total FROM appointments
-         WHERE barber_id = ? AND tenant_id = ? AND status IN ('PENDING', 'CONFIRMED') AND ends_at > UTC_TIMESTAMP()`,
+         WHERE barber_id = ? AND tenant_id = ? AND status IN ('PENDING', 'CONFIRMED') AND ends_at > now()`,
         [id.data, tenantId]
       );
       if (Number(pending.total) > 0) {
@@ -129,7 +129,7 @@ router.patch('/:id', ...requireTenantAdmin, async (request, response, next) => {
       // La cuenta global solo se bloquea si la persona no trabaja en otra
       // barbería: desactivarla aquí no debe dejarla sin acceso en otro tenant.
       await connection.execute(
-        `UPDATE users u SET u.is_active = ?
+        `UPDATE users u SET is_active = ?
          WHERE u.id = ? AND NOT EXISTS (
            SELECT 1 FROM tenant_memberships m WHERE m.user_id = u.id AND m.tenant_id <> ? AND m.is_active = TRUE
          )`,
@@ -187,7 +187,7 @@ router.get('/:id/working-hours', ...requireTenantAdmin, async (request, response
   if (!id.success) return response.status(400).json({ message: 'Barbero invalido' });
   try {
     const [rows] = await pool.execute(
-      'SELECT id, weekday, start_time AS startTime, end_time AS endTime, is_active AS isActive FROM barber_working_hours WHERE barber_id = ? AND tenant_id = ? ORDER BY weekday, start_time',
+      'SELECT id, weekday, start_time AS "startTime", end_time AS "endTime", is_active AS "isActive" FROM barber_working_hours WHERE barber_id = ? AND tenant_id = ? ORDER BY weekday, start_time',
       [id.data, tenantIdOf(request)]
     );
     return response.json({ workingHours: rows });
@@ -202,7 +202,7 @@ router.post('/:id/working-hours', ...requireTenantAdmin, async (request, respons
     const tenantId = tenantIdOf(request);
     if (!await barberBelongsToTenant(pool, tenantId, id.data)) return barberNotFound(response);
     const [result] = await pool.execute(
-      'INSERT INTO barber_working_hours (tenant_id, barber_id, weekday, start_time, end_time) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO barber_working_hours (tenant_id, barber_id, weekday, start_time, end_time) VALUES (?, ?, ?, ?, ?) RETURNING id',
       [tenantId, id.data, parsed.data.weekday, parsed.data.startTime, parsed.data.endTime]
     );
     return response.status(201).json({ id: result.insertId, message: 'Horario laboral creado' });
@@ -229,7 +229,7 @@ router.get('/:id/blocks', ...requireTenantAdmin, async (request, response, next)
   if (!id.success) return response.status(400).json({ message: 'Barbero invalido' });
   try {
     const [rows] = await pool.execute(
-      'SELECT id, starts_at AS startsAt, ends_at AS endsAt, reason FROM schedule_blocks WHERE barber_id = ? AND tenant_id = ? ORDER BY starts_at DESC',
+      'SELECT id, starts_at AS "startsAt", ends_at AS "endsAt", reason FROM schedule_blocks WHERE barber_id = ? AND tenant_id = ? ORDER BY starts_at DESC',
       [id.data, tenantIdOf(request)]
     );
     return response.json({ blocks: rows });
@@ -244,7 +244,7 @@ router.post('/:id/blocks', ...requireTenantAdmin, async (request, response, next
     const tenantId = tenantIdOf(request);
     if (!await barberBelongsToTenant(pool, tenantId, id.data)) return barberNotFound(response);
     const [result] = await pool.execute(
-      'INSERT INTO schedule_blocks (tenant_id, barber_id, starts_at, ends_at, reason) VALUES (?, ?, ?, ?, ?)',
+      'INSERT INTO schedule_blocks (tenant_id, barber_id, starts_at, ends_at, reason) VALUES (?, ?, ?, ?, ?) RETURNING id',
       [tenantId, id.data, new Date(parsed.data.startsAt), new Date(parsed.data.endsAt), parsed.data.reason ?? null]
     );
     return response.status(201).json({ id: result.insertId, message: 'Bloqueo creado' });

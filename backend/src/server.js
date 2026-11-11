@@ -3,14 +3,17 @@ import app from './app.js';
 import pool from './config/database.js';
 import { validateEnvironment } from './config/environment.js';
 import { startReminderWorker } from './services/reminders.js';
+import { startPaymentProofCleanup } from './services/payment-proof-retention.js';
 
 validateEnvironment();
 const port = Number(process.env.PORT ?? 3000);
 let stopReminders = () => {};
+let stopProofCleanup = () => {};
 
 const server = app.listen(port, '0.0.0.0', () => {
   console.log(`API disponible en http://localhost:${port}`);
   stopReminders = startReminderWorker();
+  stopProofCleanup = startPaymentProofCleanup();
 });
 
 // Al redeplegar, el proveedor envía SIGTERM: se dejan de aceptar conexiones,
@@ -21,6 +24,7 @@ function shutdown(signal) {
   shuttingDown = true;
   console.log(`${signal} recibido: cerrando la API...`);
   stopReminders();
+  stopProofCleanup();
   const forceExit = setTimeout(() => { console.error('Cierre forzado tras 10 s'); process.exit(1); }, 10_000);
   forceExit.unref();
   server.close(() => {

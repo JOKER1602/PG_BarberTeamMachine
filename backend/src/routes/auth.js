@@ -5,7 +5,6 @@ import { z } from 'zod';
 import pool from '../config/database.js';
 import { clearAuthCookie, requireAuth, setAuthCookie } from '../middleware/auth.js';
 import { isEmailConfigured, sendPasswordResetEmail } from '../services/email.js';
-import { normalizeBolivianPhone } from '../services/whatsapp.js';
 import { changePasswordLimiter, loginLimiters, passwordResetLimiters, registerLimiter, resetPasswordLimiter } from '../middleware/rate-limit.js';
 
 const router = Router();
@@ -35,7 +34,6 @@ function publicUser(user) {
     lastName: user.last_name,
     email: user.email,
     phone: user.phone,
-    whatsappConsent: Boolean(user.whatsapp_opt_in_at),
     mustChangePassword: Boolean(user.must_change_password),
     role: user.role
   };
@@ -46,7 +44,7 @@ function publicUser(user) {
 // API vuelve a verificar la membresía en cada petición.
 async function sessionUser(user) {
   const [memberships] = await pool.execute(
-    `SELECT t.slug AS tenantSlug, t.display_name AS tenantName, m.role
+    `SELECT t.slug AS "tenantSlug", t.display_name AS "tenantName", m.role
      FROM tenant_memberships m JOIN tenants t ON t.id = m.tenant_id
      WHERE m.user_id = ? AND m.is_active = TRUE AND t.status IN ('TRIAL', 'ACTIVE')
      ORDER BY t.display_name`,
@@ -72,11 +70,11 @@ router.post('/register', registerLimiter, async (request, response, next) => {
     const passwordHash = await bcrypt.hash(password, 12);
     const [result] = await pool.execute(
       `INSERT INTO users (role_id, first_name, last_name, email, phone, password_hash)
-       SELECT id, ?, ?, ?, ?, ? FROM roles WHERE name = 'CLIENTE'`,
+       SELECT id, ?, ?, ?, ?, ? FROM roles WHERE name = 'CLIENTE' RETURNING id`,
       [firstName, lastName, email, phone, passwordHash]
     );
     const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.whatsapp_opt_in_at, r.name AS role
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`,
       [result.insertId]
     );
@@ -97,7 +95,7 @@ router.post('/login', ...loginLimiters, async (request, response, next) => {
 
   try {
     const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.whatsapp_opt_in_at, u.must_change_password, u.password_hash, u.is_active,
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.must_change_password, u.password_hash, u.is_active,
               r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.email = ?`,
       [parsed.data.email]
@@ -124,7 +122,7 @@ router.post('/logout', (_request, response) => {
 router.get('/me', requireAuth, async (request, response, next) => {
   try {
     const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.whatsapp_opt_in_at, u.must_change_password, u.is_active, r.name AS role
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.must_change_password, u.is_active, r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`,
       [request.auth.sub]
     );
@@ -143,45 +141,18 @@ router.patch('/me', requireAuth, async (request, response, next) => {
   const parsed = z.object({
     firstName: personNameSchema,
     lastName: personNameSchema,
-    phone: z.string().trim().max(30).nullable().optional(),
-    whatsappConsent: z.boolean().optional()
+    phone: z.string().trim().max(30).nullable().optional()
   }).safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de perfil invalidos' });
-  if (parsed.data.whatsappConsent) {
-    try { normalizeBolivianPhone(parsed.data.phone); }
-    catch (error) { return response.status(400).json({ message: error.message }); }
-  }
-  let connection;
   try {
-    connection = await pool.getConnection();
-    await connection.beginTransaction();
-    await connection.execute(
-      `UPDATE users SET first_name = ?, last_name = ?,
-       whatsapp_opt_in_at = CASE
-         WHEN ? = 1 AND (whatsapp_opt_in_at IS NULL OR NOT (phone <=> ?)) THEN UTC_TIMESTAMP()
-         WHEN ? = 0 OR NOT (phone <=> ?) THEN NULL ELSE whatsapp_opt_in_at END,
-       phone = ? WHERE id = ?`,
-      [parsed.data.firstName, parsed.data.lastName, parsed.data.whatsappConsent === undefined ? -1 : Number(parsed.data.whatsappConsent), parsed.data.phone ?? null, parsed.data.whatsappConsent === undefined ? -1 : Number(parsed.data.whatsappConsent), parsed.data.phone ?? null, parsed.data.phone ?? null, request.auth.sub]
-    );
-    if (parsed.data.whatsappConsent) {
-      await connection.execute(
-        // El consentimiento es de la persona (global): se aplica a sus citas
-        // confirmadas en todas las barberías, cada trabajo con el tenant de su cita.
-        `INSERT INTO reminder_jobs (tenant_id, appointment_id, channel, reminder_type, scheduled_at, status)
-         SELECT tenant_id, id, 'WHATSAPP', '2H', DATE_SUB(starts_at, INTERVAL 2 HOUR), 'PENDING'
-         FROM appointments WHERE client_id = ? AND status = 'CONFIRMED' AND starts_at >= DATE_ADD(UTC_TIMESTAMP(), INTERVAL 2 HOUR)
-         ON DUPLICATE KEY UPDATE scheduled_at = VALUES(scheduled_at), status = IF(reminder_jobs.status = 'CANCELLED', 'PENDING', reminder_jobs.status)`,
-        [request.auth.sub]
-      );
-    }
-    const [rows] = await connection.execute(
-      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, u.whatsapp_opt_in_at, r.name AS role
+    await pool.execute('UPDATE users SET first_name = ?, last_name = ?, phone = ? WHERE id = ?',
+      [parsed.data.firstName, parsed.data.lastName, parsed.data.phone ?? null, request.auth.sub]);
+    const [rows] = await pool.execute(
+      `SELECT u.id, u.first_name, u.last_name, u.email, u.phone, r.name AS role
        FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = ?`, [request.auth.sub]
     );
-    await connection.commit();
     return response.json({ user: await sessionUser(rows[0]) });
-  } catch (error) { if (connection) await connection.rollback(); return next(error); }
-  finally { connection?.release(); }
+  } catch (error) { return next(error); }
 });
 
 router.patch('/me/password', requireAuth, changePasswordLimiter, async (request, response, next) => {
@@ -206,7 +177,7 @@ router.post('/forgot-password', ...passwordResetLimiters, async (request, respon
   // enlace de vuelta. Si no existe o no está activa, se usa la marca general.
   const [brandRows] = parsed.data.tenantSlug
     ? await pool.execute(
-      `SELECT t.slug, COALESCE(ts.business_name, t.display_name) AS brandName
+      `SELECT t.slug, COALESCE(ts.business_name, t.display_name) AS "brandName"
        FROM tenants t LEFT JOIN tenant_settings ts ON ts.tenant_id = t.id
        WHERE t.slug = ? AND t.status IN ('TRIAL', 'ACTIVE')`, [parsed.data.tenantSlug]).catch(() => [[]])
     : [[]];
@@ -217,7 +188,7 @@ router.post('/forgot-password', ...passwordResetLimiters, async (request, respon
       return response.status(503).json({ message: 'El servicio de correo aún no está configurado. Contacta a la barbería.' });
     }
 
-    const [rows] = await pool.execute('SELECT id, first_name AS firstName, email FROM users WHERE email = ? AND is_active = TRUE', [parsed.data.email.toLowerCase()]);
+    const [rows] = await pool.execute('SELECT id, first_name AS "firstName", email FROM users WHERE email = ? AND is_active = TRUE', [parsed.data.email.toLowerCase()]);
     if (rows.length > 0) {
       const rawToken = crypto.randomBytes(32).toString('hex');
       const tokenHash = crypto.createHash('sha256').update(rawToken).digest('hex');
@@ -225,8 +196,8 @@ router.post('/forgot-password', ...passwordResetLimiters, async (request, respon
       const frontendUrl = ((process.env.FRONTEND_URL ?? '').split(',')[0].trim() || 'http://localhost:5173').replace(/\/$/, '');
       const resetUrl = `${frontendUrl}/recuperar-contrasena?token=${rawToken}${brand ? `&t=${brand.slug}` : ''}`;
 
-      await pool.execute('UPDATE password_reset_tokens SET used_at = UTC_TIMESTAMP() WHERE user_id = ? AND used_at IS NULL', [rows[0].id]);
-      await pool.execute('INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, DATE_ADD(UTC_TIMESTAMP(), INTERVAL 30 MINUTE))', [rows[0].id, tokenHash]);
+      await pool.execute('UPDATE password_reset_tokens SET used_at = now() WHERE user_id = ? AND used_at IS NULL', [rows[0].id]);
+      await pool.execute(`INSERT INTO password_reset_tokens (user_id, token_hash, expires_at) VALUES (?, ?, now() + interval '30 minutes')`, [rows[0].id, tokenHash]);
       try {
         await sendPasswordResetEmail({ to: rows[0].email, firstName: rows[0].firstName, resetUrl, brandName: brand?.brandName });
       } catch (emailError) {
@@ -254,7 +225,7 @@ router.post('/reset-password', resetPasswordLimiter, async (request, response, n
     const tokenHash = crypto.createHash('sha256').update(parsed.data.token).digest('hex');
     const [rows] = await pool.execute(
       `SELECT user_id FROM password_reset_tokens
-       WHERE token_hash = ? AND used_at IS NULL AND expires_at > UTC_TIMESTAMP()`,
+       WHERE token_hash = ? AND used_at IS NULL AND expires_at > now()`,
       [tokenHash]
     );
     if (rows.length === 0) {
@@ -263,7 +234,7 @@ router.post('/reset-password', resetPasswordLimiter, async (request, response, n
 
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
     await pool.execute('UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?', [passwordHash, rows[0].user_id]);
-    await pool.execute('UPDATE password_reset_tokens SET used_at = UTC_TIMESTAMP() WHERE token_hash = ?', [tokenHash]);
+    await pool.execute('UPDATE password_reset_tokens SET used_at = now() WHERE token_hash = ?', [tokenHash]);
     return response.json({ message: 'Contrasena actualizada correctamente' });
   } catch (error) {
     return next(error);

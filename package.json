@@ -18,7 +18,10 @@
     "db:backup": "node scripts/backup-db.mjs",
     "platform:admin": "node scripts/platform-admin.mjs",
     "verify:fresh-install": "node scripts/verify-fresh-install.mjs",
-    "db:migrate": "node scripts/migrate.mjs"
+    "db:migrate": "node scripts/migrate.mjs",
+    "test:routes": "node tests/integration/all-routes.mjs",
+    "test:stress": "node tests/performance/stress-barberias.mjs",
+    "db:import-mysql": "node scripts/mysql-to-postgres.mjs"
   },
   "devDependencies": {
     "concurrently": "^9.1.2"

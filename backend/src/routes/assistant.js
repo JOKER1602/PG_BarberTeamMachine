@@ -23,8 +23,8 @@ router.post('/query', assistantLimiter, async (request, response, next) => {
   const connection = await pool.getConnection();
   try {
     // Solo servicios y profesionales de la barbería consultada.
-    const [services] = await connection.execute('SELECT id, name, price, duration_minutes AS durationMinutes FROM services WHERE tenant_id = ? AND is_active = TRUE ORDER BY name', [tenantId]);
-    const [barbers] = await connection.execute('SELECT id, display_name AS displayName FROM barbers WHERE tenant_id = ? AND is_active = TRUE ORDER BY display_name', [tenantId]);
+    const [services] = await connection.execute('SELECT id, name, price, duration_minutes AS "durationMinutes" FROM services WHERE tenant_id = ? AND is_active = TRUE ORDER BY name', [tenantId]);
+    const [barbers] = await connection.execute('SELECT id, display_name AS "displayName" FROM barbers WHERE tenant_id = ? AND is_active = TRUE ORDER BY display_name', [tenantId]);
     const interpretation = interpretBookingRequest(parsed.data.query, { services, barbers });
     if (!interpretation.service) {
       return response.json({

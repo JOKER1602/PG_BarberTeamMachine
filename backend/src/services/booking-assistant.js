@@ -5,11 +5,11 @@ const weekdays = {
   viernes: 5, sabado: 6, sábado: 6, domingo: 0
 };
 
-export function normalizeText(value = '') {
+function normalizeText(value = '') {
   return String(value).normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().trim();
 }
 
-export function barberToday(now = new Date()) {
+function barberToday(now = new Date()) {
   const parts = Object.fromEntries(new Intl.DateTimeFormat('en-CA', {
     timeZone: BARBER_TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit'
   }).formatToParts(now).filter((part) => part.type !== 'literal').map((part) => [part.type, part.value]));

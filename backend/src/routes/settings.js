@@ -19,9 +19,9 @@ const fields = {
   businessName: 'business_name', address: 'address', city: 'city', country: 'country', phone: 'phone', whatsapp: 'whatsapp',
   hoursText: 'hours_text', mapsUrl: 'maps_url', instagramUrl: 'instagram_url', facebookUrl: 'facebook_url', paymentQrUrl: 'payment_qr_url', description: 'description'
 };
-const selectSettings = `SELECT business_name AS businessName, address, city, country, phone, whatsapp,
-  hours_text AS hoursText, maps_url AS mapsUrl, instagram_url AS instagramUrl, facebook_url AS facebookUrl, payment_qr_url AS paymentQrUrl,
-  logo_url AS logoUrl, cover_url AS coverUrl, description
+const selectSettings = `SELECT business_name AS "businessName", address, city, country, phone, whatsapp,
+  hours_text AS "hoursText", maps_url AS "mapsUrl", instagram_url AS "instagramUrl", facebook_url AS "facebookUrl", payment_qr_url AS "paymentQrUrl",
+  logo_url AS "logoUrl", cover_url AS "coverUrl", description
   FROM tenant_settings WHERE tenant_id = ?`;
 // El QR se guarda como ruta relativa (/uploads/qr/...) o, en datos antiguos, como URL completa.
 const uploadOrUrl = z.string().trim().max(2048).refine((value) => /^\/uploads\/[\w./-]+$/.test(value) || /^https?:\/\//.test(value), 'Dirección de imagen inválida');
@@ -47,7 +47,7 @@ router.patch('/', ...requireTenantAdmin, async (request, response, next) => {
     const values = Object.keys(fields).map((key) => parsed.data[key] ?? null);
     await pool.execute(
       `INSERT INTO tenant_settings (tenant_id, ${Object.values(fields).join(', ')}) VALUES (?, ${Object.keys(fields).map(() => '?').join(', ')})
-       ON DUPLICATE KEY UPDATE ${Object.values(fields).map((field) => `${field} = VALUES(${field})`).join(', ')}`,
+       ON CONFLICT (tenant_id) DO UPDATE SET ${Object.values(fields).map((field) => `${field} = EXCLUDED.${field}`).join(', ')}`,
       [tenantId, ...values]
     );
     const [rows] = await pool.execute(selectSettings, [tenantId]);

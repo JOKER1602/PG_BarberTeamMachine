@@ -39,18 +39,18 @@ router.get('/dashboard', async (request, response, next) => {
   try {
     const [metricRows] = await pool.execute(
       `SELECT COUNT(*) AS appointments,
-       COALESCE(SUM(a.status = 'COMPLETED'), 0) AS completed,
-       COALESCE(SUM(a.status = 'CANCELLED'), 0) AS cancelled,
-       COALESCE(SUM(a.status = 'PENDING'), 0) AS pending,
-       COALESCE(SUM(a.status = 'CONFIRMED'), 0) AS confirmed,
-       COALESCE(SUM(a.status = 'NO_SHOW'), 0) AS noShow,
-       COALESCE(SUM(CASE WHEN a.status IN ('CONFIRMED', 'COMPLETED') THEN s.price ELSE 0 END), 0) AS confirmedRevenue,
-       COALESCE(SUM(CASE WHEN a.status = 'COMPLETED' THEN s.price ELSE 0 END), 0) AS completedRevenue,
-       COALESCE(SUM(CASE WHEN a.status IN ('PENDING', 'CONFIRMED', 'COMPLETED') THEN TIMESTAMPDIFF(MINUTE, a.starts_at, a.ends_at) ELSE 0 END), 0) AS occupiedMinutes,
+       COUNT(*) FILTER (WHERE a.status = 'COMPLETED') AS completed,
+       COUNT(*) FILTER (WHERE a.status = 'CANCELLED') AS cancelled,
+       COUNT(*) FILTER (WHERE a.status = 'PENDING') AS pending,
+       COUNT(*) FILTER (WHERE a.status = 'CONFIRMED') AS confirmed,
+       COUNT(*) FILTER (WHERE a.status = 'NO_SHOW') AS "noShow",
+       COALESCE(SUM(CASE WHEN a.status IN ('CONFIRMED', 'COMPLETED') THEN s.price ELSE 0 END), 0) AS "confirmedRevenue",
+       COALESCE(SUM(CASE WHEN a.status = 'COMPLETED' THEN s.price ELSE 0 END), 0) AS "completedRevenue",
+       COALESCE(SUM(CASE WHEN a.status IN ('PENDING', 'CONFIRMED', 'COMPLETED') THEN (EXTRACT(EPOCH FROM (a.ends_at - a.starts_at)) / 60)::int ELSE 0 END), 0) AS "occupiedMinutes",
        COALESCE((SELECT COUNT(*) FROM (
          SELECT a2.client_id FROM appointments a2 ${where.replaceAll('a.', 'a2.')}
          GROUP BY a2.client_id HAVING COUNT(*) > 1
-       ) AS recurrent), 0) AS recurringClients
+       ) AS recurrent), 0) AS "recurringClients"
        FROM appointments a JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id ${where}`,
       [...values, ...values]
     );
@@ -60,7 +60,7 @@ router.get('/dashboard', async (request, response, next) => {
        GROUP BY s.id, s.name ORDER BY total DESC, s.name ASC LIMIT 6`, values
     );
     const [hourRows] = await pool.execute(
-      `SELECT DATE_FORMAT(${localSqlTime('a.starts_at')}, '%H:00') AS label, COUNT(*) AS total
+      `SELECT to_char(${localSqlTime('a.starts_at')}, 'HH24:00') AS label, COUNT(*) AS total
        FROM appointments a ${where}
        GROUP BY label
        ORDER BY label ASC LIMIT 12`, values
@@ -71,8 +71,8 @@ router.get('/dashboard', async (request, response, next) => {
     );
     const [dailyRows] = await pool.execute(
       `SELECT * FROM (
-         SELECT DATE_FORMAT(${localSqlTime('a.starts_at')}, '%Y-%m-%d') AS date, COUNT(*) AS total,
-         COALESCE(SUM(a.status = 'COMPLETED'), 0) AS completed
+         SELECT to_char(${localSqlTime('a.starts_at')}, 'YYYY-MM-DD') AS date, COUNT(*) AS total,
+         COUNT(*) FILTER (WHERE a.status = 'COMPLETED') AS completed
          FROM appointments a ${where}
          GROUP BY date
          ORDER BY date DESC LIMIT 31
@@ -80,21 +80,21 @@ router.get('/dashboard', async (request, response, next) => {
     );
     const [barberRows] = await pool.execute(
       `SELECT b.id, b.display_name AS name, COUNT(*) AS total,
-       COALESCE(SUM(a.status = 'COMPLETED'), 0) AS completed,
-       COALESCE(SUM(a.status = 'NO_SHOW'), 0) AS noShow,
+       COUNT(*) FILTER (WHERE a.status = 'COMPLETED') AS completed,
+       COUNT(*) FILTER (WHERE a.status = 'NO_SHOW') AS "noShow",
        COALESCE(SUM(CASE WHEN a.status IN ('CONFIRMED', 'COMPLETED') THEN s.price ELSE 0 END), 0) AS revenue,
-       COALESCE(SUM(CASE WHEN a.status IN ('PENDING', 'CONFIRMED', 'COMPLETED') THEN TIMESTAMPDIFF(MINUTE, a.starts_at, a.ends_at) ELSE 0 END), 0) AS occupiedMinutes
+       COALESCE(SUM(CASE WHEN a.status IN ('PENDING', 'CONFIRMED', 'COMPLETED') THEN (EXTRACT(EPOCH FROM (a.ends_at - a.starts_at)) / 60)::int ELSE 0 END), 0) AS "occupiedMinutes"
        FROM appointments a JOIN barbers b ON b.id = a.barber_id AND b.tenant_id = a.tenant_id
        JOIN services s ON s.id = a.service_id AND s.tenant_id = a.tenant_id ${where}
        GROUP BY b.id, b.display_name ORDER BY total DESC, b.display_name ASC LIMIT 8`, values
     );
     const [clientRows] = await pool.execute(
       `SELECT u.id, CONCAT(u.first_name, ' ', u.last_name) AS name, COUNT(*) AS total,
-       MAX(a.starts_at) AS lastVisit
+       MAX(a.starts_at) AS "lastVisit"
        FROM appointments a JOIN users u ON u.id = a.client_id ${where}
        GROUP BY u.id, u.first_name, u.last_name
        HAVING COUNT(*) > 1
-       ORDER BY total DESC, lastVisit DESC LIMIT 8`, values
+       ORDER BY total DESC, "lastVisit" DESC LIMIT 8`, values
     );
     return response.json({
       metrics: metricRows[0],
@@ -115,9 +115,9 @@ router.get('/users', async (request, response, next) => {
   const tenantId = tenantIdOf(request);
   try {
     const [rows] = await pool.execute(
-      `SELECT u.id, u.first_name AS firstName, u.last_name AS lastName, u.email, u.phone,
-       u.is_active AS isActive, r.name AS role, m.role AS tenantRole, u.created_at AS createdAt,
-       (SELECT COUNT(*) FROM appointments a WHERE a.tenant_id = ? AND a.client_id = u.id) AS appointmentCount
+      `SELECT u.id, u.first_name AS "firstName", u.last_name AS "lastName", u.email, u.phone,
+       u.is_active AS "isActive", r.name AS role, m.role AS "tenantRole", u.created_at AS "createdAt",
+       (SELECT COUNT(*) FROM appointments a WHERE a.tenant_id = ? AND a.client_id = u.id) AS "appointmentCount"
        FROM users u JOIN roles r ON r.id = u.role_id
        LEFT JOIN tenant_memberships m ON m.user_id = u.id AND m.tenant_id = ?
        WHERE m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM appointments a WHERE a.tenant_id = ? AND a.client_id = u.id)
@@ -143,7 +143,7 @@ router.post('/barber-accounts', async (request, response, next) => {
   const connection = await pool.getConnection();
   try {
     await connection.beginTransaction();
-    const [barberRows] = await connection.execute('SELECT id, display_name AS displayName, user_id AS userId FROM barbers WHERE id = ? AND tenant_id = ? FOR UPDATE', [parsed.data.barberId, tenantId]);
+    const [barberRows] = await connection.execute('SELECT id, display_name AS "displayName", user_id AS "userId" FROM barbers WHERE id = ? AND tenant_id = ? FOR UPDATE', [parsed.data.barberId, tenantId]);
     if (!barberRows.length) { await connection.rollback(); return response.status(404).json({ message: 'Barbero no encontrado' }); }
     if (barberRows[0].userId) { await connection.rollback(); return response.status(409).json({ message: 'Este barbero ya tiene una cuenta de acceso' }); }
     const [existingUsers] = await connection.execute('SELECT id FROM users WHERE email = ?', [parsed.data.email]);
@@ -155,7 +155,7 @@ router.post('/barber-accounts', async (request, response, next) => {
     const passwordHash = await bcrypt.default.hash(parsed.data.password, 12);
     const [userResult] = await connection.execute(
       `INSERT INTO users (role_id, first_name, last_name, email, phone, password_hash, must_change_password)
-       SELECT id, ?, ?, ?, ?, ?, TRUE FROM roles WHERE name = 'BARBERO'`,
+       SELECT id, ?, ?, ?, ?, ?, TRUE FROM roles WHERE name = 'BARBERO' RETURNING id`,
       [firstName, lastName, parsed.data.email, parsed.data.phone || null, passwordHash]
     );
     if (!userResult.insertId) { await connection.rollback(); return response.status(400).json({ message: 'El rol BARBERO no esta configurado' }); }
@@ -163,7 +163,7 @@ router.post('/barber-accounts', async (request, response, next) => {
     // El acceso del profesional a esta barbería se concede con su membresía.
     await connection.execute(
       `INSERT INTO tenant_memberships (tenant_id, user_id, role, is_active) VALUES (?, ?, 'BARBER', TRUE)
-       ON DUPLICATE KEY UPDATE role = 'BARBER', is_active = TRUE`,
+       ON CONFLICT (tenant_id, user_id) DO UPDATE SET role = 'BARBER', is_active = TRUE`,
       [tenantId, userResult.insertId]
     );
     await connection.commit();
@@ -183,10 +183,10 @@ router.patch('/users/:id', async (request, response, next) => {
     // Solo se gestiona a personas relacionadas con esta barbería.
     const [[relation]] = await connection.execute(
       `SELECT
-         EXISTS (SELECT 1 FROM tenant_memberships WHERE tenant_id = ? AND user_id = ?) AS isMember,
-         EXISTS (SELECT 1 FROM appointments WHERE tenant_id = ? AND client_id = ?) AS isClient,
+         EXISTS (SELECT 1 FROM tenant_memberships WHERE tenant_id = ? AND user_id = ?) AS "isMember",
+         EXISTS (SELECT 1 FROM appointments WHERE tenant_id = ? AND client_id = ?) AS "isClient",
          EXISTS (SELECT 1 FROM tenant_memberships WHERE tenant_id <> ? AND user_id = ?)
-           OR EXISTS (SELECT 1 FROM appointments WHERE tenant_id <> ? AND client_id = ?) AS usedElsewhere`,
+           OR EXISTS (SELECT 1 FROM appointments WHERE tenant_id <> ? AND client_id = ?) AS "usedElsewhere"`,
       [tenantId, id.data, tenantId, id.data, tenantId, id.data, tenantId, id.data]
     );
     if (!relation.isMember && !relation.isClient) { await connection.rollback(); return response.status(404).json({ message: 'Usuario no encontrado' }); }

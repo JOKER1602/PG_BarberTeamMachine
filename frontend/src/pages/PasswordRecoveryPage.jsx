@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, clearSession } from '../api.js';
-import { brandInitials, brandWords, tenantBrand, tenantHref } from '../tenant.js';
+import { tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
 
 function useAutoDismiss(message, dismiss, delay = 4500) {

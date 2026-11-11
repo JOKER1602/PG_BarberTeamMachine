@@ -14,7 +14,7 @@ import pool from '../config/database.js';
 //
 // Requiere las tablas de 013_saas_foundation.sql y las columnas de 014.
 
-export const TENANT_ROLES = Object.freeze(['OWNER', 'ADMIN', 'BARBER', 'RECEPTIONIST']);
+const TENANT_ROLES = Object.freeze(['OWNER', 'ADMIN', 'BARBER', 'RECEPTIONIST']);
 // No hay jerarquía implícita: cada ruta enumera los roles que acepta.
 export const TENANT_ADMIN_ROLES = Object.freeze(['OWNER', 'ADMIN']);
 
@@ -45,7 +45,7 @@ async function loadTenant(slug, request, response, next) {
 
   try {
     const [rows] = await pool.execute(
-      'SELECT id, slug, display_name AS displayName, status FROM tenants WHERE slug = ?',
+      'SELECT id, slug, display_name AS "displayName", status FROM tenants WHERE slug = ?',
       [slug]
     );
     const tenant = rows[0];

@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, saveSession } from '../api.js';
-import { brandInitials, brandWords, passwordRecoveryHref, tenantBrand, tenantHref } from '../tenant.js';
+import { brandInitials, passwordRecoveryHref, tenantBrand, tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;

@@ -46,7 +46,7 @@ router.get('/proofs/:proofId', requireAuth, requireTenantMembership(...TENANT_AD
   if (!proofId.success) return response.status(400).json({ message: 'Comprobante inválido.' });
   try {
     const [rows] = await pool.execute(
-      'SELECT storage_key AS storageKey FROM payment_proofs WHERE id = ? AND tenant_id = ?',
+      'SELECT storage_key AS "storageKey" FROM payment_proofs WHERE id = ? AND tenant_id = ?',
       [proofId.data, tenantIdOf(request)]
     );
     if (!rows.length) return response.status(404).json({ message: 'Comprobante no encontrado.' });

@@ -1,18 +1,18 @@
-// Respaldo de la base MySQL (y opcionalmente de las subidas).
+// Respaldo de la base PostgreSQL (y opcionalmente de las subidas).
 //
-//   npm run db:backup                      → backups/<base>-<fecha>.sql.gz
+//   npm run db:backup                      → backups/reservas-<fecha>.sql.gz
 //   BACKUP_DIR=/ruta npm run db:backup     → otra carpeta
 //   BACKUP_KEEP_DAYS=14 npm run db:backup  → borra respaldos más antiguos
 //   npm run db:backup -- --con-archivos    → además copia UPLOADS_DIR (.tar.gz)
 //
-// Usa la conexión de backend/.env y la herramienta mysqldump (MYSQLDUMP_PATH si
-// no está en el PATH). La contraseña viaja por variable de entorno, nunca por
-// la línea de comandos. Restaurar:
-//   gunzip -c respaldo.sql.gz | mysql -h HOST -u USUARIO -p NOMBRE_BASE
+// Conexión: MIGRATION_DATABASE_URL o DATABASE_URL. Usa pg_dump (PG_DUMP_PATH si no
+// está en el PATH; debe ser de versión igual o mayor a la del servidor). La
+// contraseña viaja por variable de entorno, nunca por la línea de comandos.
+// Restaurar en una base vacía:
+//   gunzip -c respaldo.sql.gz | psql "postgresql://..." -v ON_ERROR_STOP=1
 //
-// Un respaldo solo cuenta si se probó restaurarlo: hazlo al menos una vez al
-// mes sobre una base de prueba. Si el proveedor de MySQL ofrece respaldos
-// automáticos, actívalos además de este script.
+// Un respaldo solo cuenta si se probó restaurarlo: hazlo al menos una vez al mes
+// sobre una base de prueba.
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { createWriteStream, existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs';
@@ -26,10 +26,10 @@ const backend = path.join(root, 'backend');
 const require = createRequire(path.join(backend, 'package.json'));
 require('dotenv').config({ path: path.join(backend, '.env') });
 
-const database = process.env.DATABASE_NAME ?? 'barber_team_machine';
 const outputDir = path.resolve(process.env.BACKUP_DIR ?? path.join(root, 'backups'));
 const keepDays = Number(process.env.BACKUP_KEEP_DAYS ?? 30);
 const stamp = new Date().toISOString().slice(0, 19).replace(/[:T]/g, '-');
+const schema = process.env.DATABASE_SCHEMA || 'reservas';
 mkdirSync(outputDir, { recursive: true });
 
 function run(command, args, { env, outputFile }) {
@@ -47,12 +47,18 @@ function run(command, args, { env, outputFile }) {
 }
 
 try {
-  const dumpFile = path.join(outputDir, `${database}-${stamp}.sql.gz`);
-  await run(process.env.MYSQLDUMP_PATH ?? 'mysqldump', [
-    '-h', process.env.DATABASE_HOST ?? 'localhost', '-P', String(process.env.DATABASE_PORT ?? 3306), '-u', process.env.DATABASE_USER ?? 'root',
-    '--single-transaction', '--routines', '--triggers', '--default-character-set=utf8mb4', '--set-gtid-purged=OFF', '--databases', database,
-    ...(String(process.env.DATABASE_SSL).toLowerCase() === 'true' ? ['--ssl-mode=REQUIRED'] : [])
-  ], { env: { MYSQL_PWD: process.env.DATABASE_PASSWORD ?? '' }, outputFile: dumpFile });
+  const connection = process.env.MIGRATION_DATABASE_URL || process.env.DATABASE_URL;
+  if (!connection) throw new Error('Define MIGRATION_DATABASE_URL o DATABASE_URL.');
+  const url = new URL(connection);
+  const dumpFile = path.join(outputDir, `${schema}-${stamp}.sql.gz`);
+  await run(process.env.PG_DUMP_PATH ?? 'pg_dump', ['--schema', schema, '--no-owner', '--no-privileges'], {
+    env: {
+      PGHOST: url.hostname, PGPORT: url.port || '5432', PGDATABASE: decodeURIComponent(url.pathname.slice(1)) || 'postgres',
+      PGUSER: decodeURIComponent(url.username), PGPASSWORD: decodeURIComponent(url.password),
+      ...(String(process.env.DATABASE_SSL).toLowerCase() === 'true' ? { PGSSLMODE: 'require' } : {})
+    },
+    outputFile: dumpFile
+  });
   console.log(`Base respaldada: ${dumpFile} (${Math.round(statSync(dumpFile).size / 1024)} KB)`);
 
   if (process.argv.includes('--con-archivos')) {
