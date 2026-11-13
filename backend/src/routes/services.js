@@ -3,6 +3,7 @@ import { z } from 'zod';
 import pool from '../config/database.js';
 import { requireAuth } from '../middleware/auth.js';
 import { TENANT_ADMIN_ROLES, requireTenantMembership, tenantIdOf } from '../middleware/tenant.js';
+import { firstFreeSlug, slugify } from '../domain/slug.js';
 
 // Aislado por tenant: toda consulta filtra por tenantIdOf(request), que viene
 // de la URL (o de la barbería por defecto), nunca del navegador.
@@ -19,7 +20,8 @@ const serviceSchema = z.object({
 
 const categorySchema = z.object({
   name: z.string().trim().min(2).max(80),
-  slug: z.string().trim().toLowerCase().regex(/^[a-z0-9-]{2,80}$/),
+  // Opcional: si no llega, se genera a partir del nombre (el panel ya no lo pide).
+  slug: z.string().trim().toLowerCase().regex(/^[a-z0-9-]{2,80}$/).optional(),
   description: z.string().trim().max(255).nullable().optional()
 });
 
@@ -47,12 +49,30 @@ router.get('/categories', async (request, response, next) => {
 router.post('/categories', ...requireTenantAdmin, async (request, response, next) => {
   const parsed = categorySchema.safeParse(request.body);
   if (!parsed.success) return response.status(400).json({ message: 'Datos de categoría inválidos' });
+  const tenantId = tenantIdOf(request);
+  const base = parsed.data.slug ?? slugify(parsed.data.name);
   try {
-    const [result] = await pool.execute(
-      'INSERT INTO service_categories (tenant_id, name, slug, description) VALUES (?, ?, ?, ?) RETURNING id',
-      [tenantIdOf(request), parsed.data.name, parsed.data.slug, parsed.data.description ?? null]
-    );
-    return response.status(201).json({ id: result.insertId, message: 'Categoría creada' });
+    // Si dos categorías generan el mismo identificador («Corte» y «Corte!»),
+    // se usa el siguiente libre. Reintenta si otra petición lo tomó a la vez.
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      const [taken] = await pool.execute(
+        'SELECT slug FROM service_categories WHERE tenant_id = ? AND (slug = ? OR slug LIKE ?)',
+        [tenantId, base, `${base}-%`]
+      );
+      const slug = parsed.data.slug ?? firstFreeSlug(base, taken.map((row) => row.slug));
+      try {
+        const [result] = await pool.execute(
+          'INSERT INTO service_categories (tenant_id, name, slug, description) VALUES (?, ?, ?, ?) RETURNING id',
+          [tenantId, parsed.data.name, slug, parsed.data.description ?? null]
+        );
+        return response.status(201).json({ id: result.insertId, slug, message: 'Categoría creada' });
+      } catch (error) {
+        const slugConflict = error.code === '23505' && String(error.constraint ?? '').includes('slug');
+        if (!slugConflict) throw error;
+        if (parsed.data.slug) return response.status(409).json({ message: 'Ya existe una categoría con ese identificador en esta barbería' });
+      }
+    }
+    return response.status(409).json({ message: 'No se pudo generar un identificador único; intenta de nuevo' });
   } catch (error) {
     if (duplicateNameResponse(error, response, 'una categoría')) return undefined;
     return next(error);
