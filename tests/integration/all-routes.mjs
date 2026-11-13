@@ -192,10 +192,27 @@ try {
   const cancelled = await one("SELECT COUNT(*)::int AS n FROM appointments WHERE id = ANY($1::bigint[]) AND status = 'CANCELLED'", [toConfirm.ids]);
   check('cancelar anula toda la reserva', cancelled.n === 2);
 
+  // La asistencia solo se marca desde la hora de la cita. Para probarlo sin
+  // esperar, «llega la hora» moviendo la cita a hace 5 minutos.
+  const arrive = (ids) => sql.query("UPDATE appointments SET ends_at = now() - interval '5 minutes' + (ends_at - starts_at), starts_at = now() - interval '5 minutes' WHERE id = ANY($1::bigint[])", [ids]);
+  const statusOf = async (id) => (await one('SELECT status FROM appointments WHERE id = $1', [id])).status;
   const completeByBarber = await book(dateAfter(4), 1);
   await call('PATCH', `${t}/appointments/${completeByBarber.ids[0]}/status`, 200, { cookie: owner, body: { status: 'CONFIRMED' } });
   await call('GET', `${t}/barber/dashboard`, 200, { cookie: barberCookie });
+  await call('PATCH', `${t}/barber/appointments/${completeByBarber.ids[0]}/complete`, 409, { cookie: barberCookie });
+  await arrive(completeByBarber.ids);
   await call('PATCH', `${t}/barber/appointments/${completeByBarber.ids[0]}/complete`, 200, { cookie: barberCookie });
+  // Deshacer: el barbero revierte su propio cambio reciente.
+  const barberView = await call('GET', `${t}/barber/dashboard`, 200, { cookie: barberCookie });
+  const marked = barberView.data.appointments.find((item) => Number(item.id) === Number(completeByBarber.ids[0]));
+  check('el panel del barbero ofrece deshacer', marked?.undoUntil && new Date(marked.undoUntil) > new Date(), JSON.stringify(marked));
+  await call('PATCH', `${t}/barber/appointments/${completeByBarber.ids[0]}/undo`, 200, { cookie: barberCookie });
+  check('deshacer vuelve la cita a confirmada', await statusOf(completeByBarber.ids[0]) === 'CONFIRMED');
+  await call('PATCH', `${t}/barber/appointments/${completeByBarber.ids[0]}/undo`, 409, { cookie: barberCookie });
+  await call('PATCH', `${t}/barber/appointments/${completeByBarber.ids[0]}/complete`, 200, { cookie: barberCookie });
+  await sql.query("UPDATE appointment_status_changes SET created_at = now() - interval '11 minutes' WHERE appointment_id = $1", [completeByBarber.ids[0]]);
+  await call('PATCH', `${t}/barber/appointments/${completeByBarber.ids[0]}/undo`, 409, { cookie: barberCookie });
+  check('pasada la ventana ya no se puede deshacer', await statusOf(completeByBarber.ids[0]) === 'COMPLETED');
   await call('POST', `${t}/reviews`, 201, { cookie: client, body: { appointmentId: completeByBarber.ids[0], rating: 5, comment: 'Excelente' } });
   await call('POST', `${t}/reviews`, 409, { cookie: client, body: { appointmentId: completeByBarber.ids[0], rating: 4 } });
   const reviews = await call('GET', `${t}/reviews?barberId=${barber}`, 200);
@@ -205,13 +222,36 @@ try {
   for (const [status, reason] of [['NO_SHOW', undefined], ['CANCELLED', 'Enfermo']]) {
     const appointment = await book(dateAfter(5), status === 'NO_SHOW' ? 1 : 8);
     await call('PATCH', `${t}/appointments/${appointment.ids[0]}/status`, 200, { cookie: owner, body: { status: 'CONFIRMED' } });
+    // Cancelar se puede antes de la cita; la inasistencia, solo desde su hora.
+    if (status === 'NO_SHOW') {
+      await call('PATCH', `${t}/barber/appointments/${appointment.ids[0]}/status`, 409, { cookie: barberCookie, body: { status } });
+      await arrive(appointment.ids);
+    }
     await call('PATCH', `${t}/barber/appointments/${appointment.ids[0]}/status`, 200, { cookie: barberCookie, body: { status, ...(reason ? { reason } : {}) } });
   }
+  const adminMarked = {};
   for (const [days, status] of [[6, 'COMPLETED'], [7, 'NO_SHOW']]) {
     const appointment = await book(dateAfter(days), 1);
     await call('PATCH', `${t}/appointments/${appointment.ids[0]}/status`, 200, { cookie: owner, body: { status: 'CONFIRMED' } });
+    await call('PATCH', `${t}/appointments/${appointment.ids[0]}/status`, 409, { cookie: owner, body: { status } });
+    await arrive(appointment.ids);
     await call('PATCH', `${t}/appointments/${appointment.ids[0]}/status`, 200, { cookie: owner, body: { status } });
+    adminMarked[status] = appointment.ids[0];
   }
+  // Corrección del dueño: motivo obligatorio, historial y aviso al cliente.
+  const wrongNoShow = adminMarked.NO_SHOW;
+  await call('PATCH', `${t}/appointments/${wrongNoShow}/correct-status`, 400, { cookie: owner, body: { status: 'COMPLETED', reason: 'no' } });
+  await call('PATCH', `${t}/appointments/${wrongNoShow}/correct-status`, 409, { cookie: owner, body: { status: 'NO_SHOW', reason: 'Ya estaba así' } });
+  await call('PATCH', `${t}/appointments/${wrongNoShow}/correct-status`, 403, { cookie: barberCookie, body: { status: 'COMPLETED', reason: 'El barbero intenta corregir' } });
+  await call('PATCH', `${t}/appointments/${wrongNoShow}/correct-status`, 200, { cookie: owner, body: { status: 'COMPLETED', reason: 'El barbero se equivocó de botón' } });
+  check('la corrección cambia el estado', await statusOf(wrongNoShow) === 'COMPLETED');
+  const history = await call('GET', `${t}/appointments/${wrongNoShow}/status-history`, 200, { cookie: owner });
+  check('el historial registra la corrección con su motivo', history.data.history[0]?.kind === 'CORRECTION' && history.data.history[0]?.reason === 'El barbero se equivocó de botón' && history.data.history.some((entry) => entry.toStatus === 'NO_SHOW'), JSON.stringify(history.data.history));
+  const correctionNotice = await one("SELECT COUNT(*)::int AS n FROM notifications WHERE appointment_id = $1 AND type = 'APPOINTMENT_STATUS_CORRECTED'", [wrongNoShow]);
+  check('se avisa al cliente de la corrección', correctionNotice.n === 1);
+  const agendaRow = (await call('GET', `${t}/appointments/admin`, 200, { cookie: owner })).data.appointments.find((item) => Number(item.id) === Number(wrongNoShow));
+  check('la agenda muestra el motivo de la corrección', agendaRow?.correctionReason === 'El barbero se equivocó de botón', JSON.stringify(agendaRow));
+  await call('PATCH', `${t}/appointments/${wrongNoShow}/correct-status`, 200, { cookie: owner, body: { status: 'NO_SHOW', reason: 'Volvemos al estado original' } });
   const rejected = await book(dateAfter(8), 1);
   await call('PATCH', `${t}/appointments/${rejected.ids[0]}/status`, 200, { cookie: owner, body: { status: 'CANCELLED', reason: 'Pago inválido' } });
   await call('PATCH', `${t}/barbers/${barber2}`, 200, { cookie: owner, body: { isActive: false } });
@@ -231,6 +271,21 @@ try {
   const users = await call('GET', `${t}/admin/users`, 200, { cookie: owner });
   const clientRow = users.data.users.find((item) => item.email === 'cliente@rutas.test');
   check('usuarios de la barbería', clientRow && Number(clientRow.appointmentCount) > 0, JSON.stringify(clientRow));
+  // Un cliente aparece en el panel desde que se registra o entra por la página
+  // de la barbería, aunque aún no haya reservado; uno ajeno, no.
+  await call('POST', '/auth/register', 201, { body: { firstName: 'Nina', lastName: 'Prueba', phone: '70000011', email: 'nina@rutas.test', password: PASS, tenantSlug: 'rutas-uno' } });
+  await call('POST', '/auth/register', 201, { body: { firstName: 'Omar', lastName: 'Prueba', phone: '70000012', email: 'omar@rutas.test', password: PASS } });
+  const listedEmails = async () => (await call('GET', `${t}/admin/users`, 200, { cookie: owner })).data.users.map((item) => item.email);
+  let listed = await listedEmails();
+  check('cliente registrado en la barbería aparece sin reservas', listed.includes('nina@rutas.test'), listed.join(','));
+  check('cliente de ninguna barbería no aparece', !listed.includes('omar@rutas.test'), listed.join(','));
+  await call('POST', '/auth/login', 200, { body: { email: 'omar@rutas.test', password: PASS, tenantSlug: 'rutas-uno' } });
+  await call('POST', '/auth/login', 200, { body: { email: 'dueno@rutas.test', password: PASS, tenantSlug: 'rutas-uno' } });
+  listed = await listedEmails();
+  check('cliente que inicia sesión en la barbería aparece', listed.includes('omar@rutas.test'), listed.join(','));
+  check('el personal no se duplica como cliente', listed.filter((email) => email === 'dueno@rutas.test').length === 1, listed.join(','));
+  const linkedStaff = await one("SELECT count(*)::int AS n FROM tenant_clients tc JOIN users u ON u.id = tc.user_id WHERE u.email = 'dueno@rutas.test'");
+  check('solo las cuentas CLIENTE se vinculan como clientes', linkedStaff.n === 0, JSON.stringify(linkedStaff));
   const barberRow = users.data.users.find((item) => item.email === 'bruno@rutas.test');
   await call('PATCH', `${t}/admin/users/${barberRow.id}`, 200, { cookie: owner, body: { isActive: false } });
   await call('PATCH', `${t}/admin/users/${barberRow.id}`, 200, { cookie: owner, body: { isActive: true } });

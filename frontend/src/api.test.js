@@ -58,7 +58,8 @@ describe('cliente API del frontend', () => {
       'http://localhost:3002/api/auth/login',
       expect.objectContaining({
         method: 'POST',
-        body: JSON.stringify({ email: 'ana@example.com', password: 'Clave1234' }),
+        // Incluye la barbería actual para registrar al cliente como suyo.
+        body: JSON.stringify({ email: 'ana@example.com', password: 'Clave1234', tenantSlug: 'empyrean-studio' }),
         headers: { 'Content-Type': 'application/json' },
         credentials: 'include'
       })

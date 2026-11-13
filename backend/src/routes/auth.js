@@ -15,16 +15,20 @@ const securePasswordSchema = z.string().min(8)
   .regex(/[a-z]/, 'Incluye una letra minúscula')
   .regex(/[A-Z]/, 'Incluye una letra mayúscula')
   .regex(/\d/, 'Incluye al menos un número');
+// tenantSlug: barbería desde cuya página se registra o inicia sesión.
+const tenantSlugSchema = z.string().trim().max(80).optional();
 const credentialsSchema = z.object({
   email: emailSchema,
-  password: z.string().min(8)
+  password: z.string().min(8),
+  tenantSlug: tenantSlugSchema
 });
 const registrationSchema = z.object({
   firstName: personNameSchema,
   lastName: personNameSchema,
   phone: z.string().regex(/^[67]\d{7}$/, 'Ingresa un celular boliviano válido de 8 dígitos'),
   email: emailSchema,
-  password: securePasswordSchema
+  password: securePasswordSchema,
+  tenantSlug: tenantSlugSchema
 });
 
 function publicUser(user) {
@@ -37,6 +41,27 @@ function publicUser(user) {
     mustChangePassword: Boolean(user.must_change_password),
     role: user.role
   };
+}
+
+// Registra al cliente como cliente de la barbería desde cuya página entró, para
+// que aparezca en su panel aunque todavía no haya reservado. Solo para cuentas
+// CLIENTE que no son personal de esa barbería (un dueño creado desde la
+// plataforma también tiene rol CLIENTE) y barberías activas; si falla, no
+// impide registrarse ni entrar.
+async function linkClientToTenant(user, tenantSlug) {
+  if (!tenantSlug || user.role !== 'CLIENTE') return;
+  try {
+    await pool.execute(
+      `INSERT INTO tenant_clients (tenant_id, user_id)
+       SELECT t.id, ? FROM tenants t
+       WHERE t.slug = ? AND t.status IN ('TRIAL', 'ACTIVE')
+         AND NOT EXISTS (SELECT 1 FROM tenant_memberships m WHERE m.tenant_id = t.id AND m.user_id = ?)
+       ON CONFLICT DO NOTHING`,
+      [user.id, tenantSlug, user.id]
+    );
+  } catch (error) {
+    console.warn('[auth] no se pudo vincular el cliente a la barbería:', error.message);
+  }
 }
 
 // La sesión incluye las barberías donde la persona es personal, para que el
@@ -79,6 +104,7 @@ router.post('/register', registerLimiter, async (request, response, next) => {
       [result.insertId]
     );
     const user = rows[0];
+    await linkClientToTenant(user, parsed.data.tenantSlug);
 
     setAuthCookie(response, user);
     return response.status(201).json({ user: await sessionUser(user) });
@@ -106,6 +132,7 @@ router.post('/login', ...loginLimiters, async (request, response, next) => {
     if (!passwordMatches || !user.is_active) {
       return response.status(401).json({ message: 'Correo o contrasena incorrectos' });
     }
+    await linkClientToTenant(user, parsed.data.tenantSlug);
 
     setAuthCookie(response, user);
     return response.json({ user: await sessionUser(user) });
