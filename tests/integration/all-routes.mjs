@@ -112,6 +112,12 @@ try {
   // --- Catálogo y configuración --------------------------------------------------
   const created = await call('POST', `${t}/services/categories`, 201, { cookie: owner, body: { name: 'Coloración', slug: 'coloracion', description: 'Tintes' } });
   await call('POST', `${t}/services/categories`, 409, { cookie: owner, body: { name: 'coloración', slug: 'otra' } });
+  // El panel ya no pide identificador: se genera desde el nombre y no se repite.
+  const autoSlug = await call('POST', `${t}/services/categories`, 201, { cookie: owner, body: { name: 'Diseño de cejas y más' } });
+  check('identificador generado desde el nombre', autoSlug.data.slug === 'diseno-de-cejas-y-mas', JSON.stringify(autoSlug.data));
+  const repeatedSlug = await call('POST', `${t}/services/categories`, 201, { cookie: owner, body: { name: 'Coloración!' } });
+  check('identificador repetido usa el siguiente libre', repeatedSlug.data.slug === 'coloracion-2', JSON.stringify(repeatedSlug.data));
+  await call('POST', `${t}/services/categories`, 409, { cookie: owner, body: { name: 'Otra categoría', slug: 'coloracion' } });
   const categories = (await call('GET', `${t}/services/categories`, 200)).data.categories;
   check('el alta devuelve el id de la categoría', Number.isInteger(created.data.id));
   const mkService = async (name, duration = 30) => (await call('POST', `${t}/services`, 201, { cookie: owner, body: { name, price: 50.5, durationMinutes: duration, categoryId: categories[0].id, description: 'x' } })).data.id;
