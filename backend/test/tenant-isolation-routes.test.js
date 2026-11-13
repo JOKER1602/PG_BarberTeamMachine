@@ -22,7 +22,7 @@ import recommendationsRouter from '../src/routes/recommendations.js';
 // del navegador, o si existe una ruta que esta prueba no cubre.
 const TENANT_A = 'aaaaaaaa-0000-0000-0000-000000000001';
 const TENANT_B = 'bbbbbbbb-0000-0000-0000-000000000002';
-const TENANT_TABLES = /\b(services|service_categories|barbers|barber_services|barber_working_hours|schedule_blocks|tenant_settings|appointments|tenant_memberships|notifications|payment_proofs|reviews|reminder_jobs)\b/;
+const TENANT_TABLES = /\b(services|service_categories|barbers|barber_services|barber_working_hours|schedule_blocks|tenant_settings|appointments|tenant_memberships|notifications|payment_proofs|reviews|reminder_jobs|appointment_status_changes)\b/;
 const injected = { tenantId: TENANT_B, tenant_id: TENANT_B };
 const future = new Date(Date.now() + 7 * 86_400_000);
 const futureStart = '2030-03-13T10:00:00-04:00';
@@ -65,6 +65,7 @@ const routes = [
   ['admin', 'patch', '/users/:id', { params: { id: '55' }, body: { isActive: false } }],
   ['barber', 'patch', '/appointments/:id/complete', { params: { id: '9' } }],
   ['barber', 'patch', '/appointments/:id/status', { params: { id: '9' }, body: { status: 'NO_SHOW' } }],
+  ['barber', 'patch', '/appointments/:id/undo', { params: { id: '9' } }],
   ['barber', 'get', '/dashboard'],
   ['appointments', 'get', '/availability', { query: { barberId: '2', serviceIds: '1', date: '2030-03-13' } }],
   ['appointments', 'post', '/multi', { body: { barberId: 2, serviceIds: [1], startsAt: futureStart, paymentProofId: '11111111-1111-4111-8111-111111111111' } }],
@@ -74,6 +75,8 @@ const routes = [
   ['appointments', 'patch', '/:id/cancel', { params: { id: '10' }, body: {} }],
   ['appointments', 'patch', '/:id/status', { params: { id: '10' }, body: { status: 'CONFIRMED' } }],
   ['appointments', 'patch', '/:id/admin-notes', { params: { id: '10' }, body: { adminNotes: 'Nota' } }],
+  ['appointments', 'patch', '/:id/correct-status', { params: { id: '10' }, body: { status: 'COMPLETED', reason: 'El barbero se equivocó de botón' } }],
+  ['appointments', 'get', '/:id/status-history', { params: { id: '10' } }],
   ['payments', 'post', '/proof', { uploadProof: true }],
   ['payments', 'get', '/proofs/:proofId', { params: { proofId: '11111111-1111-4111-8111-111111111111' } }],
   ['reviews', 'get', '/'],
@@ -102,7 +105,9 @@ function fakeResult(sql, values) {
   if (sql.includes('id, barber_id AS "barberId", status')) return [{ id: 10, barberId: 2, status: 'COMPLETED' }];
   if (sql.includes('FROM reviews WHERE appointment_id')) return [];
   if (sql.includes('WHERE service_id = ?')) return [];
-  if (sql.includes('b.user_id = ?') && sql.includes('FROM appointments')) return [{ id: 9, clientId: 5 }];
+  if (sql.includes('b.user_id = ?') && sql.includes('FROM appointments')) return [{ id: 9, clientId: 5, status: 'COMPLETED', hasStarted: true }];
+  if (sql.includes('FROM appointment_status_changes') && sql.includes('"withinWindow"')) return [{ id: 1, fromStatus: 'CONFIRMED', toStatus: 'COMPLETED', kind: 'CHANGE', changedBy: '10', withinWindow: true }];
+  if (sql.includes('client_id AS "clientId", status FROM appointments')) return [{ clientId: 5, status: 'NO_SHOW' }];
   if (sql.includes('FROM appointments a') && sql.includes('COMPLETED') && sql.includes('LIMIT 100')) return [];
   if (sql.includes('duration_minutes AS "durationMinutes"')) return [{ id: 1, serviceId: 1, durationMinutes: 30, price: 50 }];
   return [{ id: 1 }];

@@ -422,7 +422,10 @@ html, body, #root { max-width: 100%; overflow-x: hidden; }
 .professional-card-divider { width: 100%; height: 1px; background: #2c3440; }
 .professional-card-label, .professional-card-role { margin: 0; color: #aebbd1; font: .68rem Arial, sans-serif; }
 .professional-card-person { position: relative; display: grid; width: 90px; height: 90px; place-items: center; overflow: visible; border: 2px solid #527df0; border-radius: 50%; padding: 0; color: #edf3ff; background: #203866; }
-.professional-card-person img { width: 100%; height: 100%; border-radius: inherit; object-fit: cover; }
+/* La foto llena el círculo y se recorta a él, sea vertical u horizontal
+   (posición absoluta: la altura en % no se aplicaba dentro del grid). */
+.professional-card-person img { position: absolute; inset: 0; width: 100%; height: 100%; border-radius: 50%; object-fit: cover; object-position: center 25%; }
+.professional-card-person .professional-online { z-index: 1; }
 .professional-card-person b { font: 700 2rem Arial, sans-serif; }
 .professional-online { position: absolute; right: 1px; bottom: 4px; width: 13px; height: 13px; border: 2px solid #151a22; border-radius: 50%; background: #41d986; }
 .wizard-professional-card > strong { color: #f2f5fc; font: 700 1rem Arial, sans-serif; }
@@ -776,6 +779,9 @@ html, body, #root { max-width: 100%; overflow-x: hidden; }
 .barber-access-status { display: inline-flex; align-items: center; justify-content: center; border: 1px solid #4fba7a; border-radius: 999px; padding: .55rem .78rem; color: #b9f3cf; background: rgba(49, 144, 91, .18); font: 700 .7rem Arial, sans-serif; white-space: nowrap; }
 .admin-account-field { display: grid; gap: .35rem; color: #dce4f4; font: 700 .7rem Arial, sans-serif; }
 .admin-account-field > small { color: #aeb7c7; font: 400 .65rem/1.4 Arial, sans-serif; }
+.password-input { position: relative; display: block; }
+.password-input > input { width: 100%; padding-right: 3rem !important; }
+.password-input > button.password-visibility-toggle { padding: 0 !important; border-radius: 7px; }
 .admin-account-field.invalid > input { border-color: #db6571; box-shadow: 0 0 0 1px rgba(219, 101, 113, .18); }
 .field-error { color: #ff9ea7 !important; font-weight: 700 !important; }
 @media (max-width: 760px) { .barber-start-grid, .barber-editor-grid, .barber-access-card { grid-template-columns: 1fr; }.barber-editor-modal { max-height: none; margin: auto 0; border-radius: 14px; padding: 1rem; }.barber-editor-backdrop { display: block; padding: .75rem; }.barber-directory-heading { align-items: stretch; flex-direction: column; }.barber-directory-heading > span { align-self: flex-start; }.barber-directory-list article { grid-template-columns: 42px minmax(0, 1fr); }.barber-directory-actions { grid-column: 1 / -1; justify-content: stretch; }.barber-directory-actions button { flex: 1; }.barber-access-card { margin-top: .75rem; }.barber-access-status { justify-self: start; } }
@@ -903,3 +909,38 @@ html, body, #root { max-width: 100%; overflow-x: hidden; }
 
 /* Pago cuyo comprobante ya se borró por antigüedad. */
 .payment-proof-expired{color:#9aa3b5;font-size:.78rem;font-style:italic}
+
+/* Portada de la página de reserva en celular: la imagen se muestra entera en
+   proporción apaisada (sin recortar el logo a los lados) y los datos de la
+   barbería van debajo, en lugar de encima de la imagen. */
+@media (max-width: 760px) {
+  .booking-page.booking-experience .booking-hero { display: flex; flex-direction: column; min-height: 0; }
+  .booking-page.booking-experience .booking-hero::after { display: none; }
+  .booking-page.booking-experience .booking-hero-image { position: relative; inset: auto; height: auto; aspect-ratio: 16 / 10; object-position: center; }
+  .booking-page.booking-experience .booking-profile { align-self: stretch; margin: 0 auto; padding: 1.1rem 0 1.4rem; }
+}
+
+/* Asistencia de citas: botones bloqueados hasta la hora de la cita, deshacer
+   del barbero y corrección con historial en el panel del admin. */
+.attendance-locked { align-self: center; color: #9aa6bd; font: italic .66rem/1.3 Arial, sans-serif; }
+.admin-appointment-actions .admin-mark-completed { background: #2f8f5b !important; }
+.admin-appointment-actions .admin-mark-no-show { background: #7a2f38 !important; color: #ffe1e4 !important; }
+.appointment-note.correction { color: #c9d8ff; }
+.barber-undo { border: 1px solid #e0b24f; border-radius: 8px; padding: .55rem .8rem; color: #2a1d00; background: #f2c35b; font: 700 .72rem Arial, sans-serif; cursor: pointer; }
+.barber-notice { display: flex; align-items: center; justify-content: space-between; gap: .75rem; width: min(100% - 3rem, 1020px); margin: 0 auto 1rem; border: 1px solid #2f5aa8; border-radius: 9px; padding: .8rem 1rem; color: #d5e2ff; background: #18284a; font: .74rem/1.45 Arial, sans-serif; }
+.barber-notice button { flex: 0 0 auto; border: 0; color: inherit; background: transparent; font-size: 1.1rem; cursor: pointer; }
+.status-correction-modal form { display: grid; gap: .75rem; margin-top: 1rem; }
+.status-correction-modal label { display: grid; gap: .4rem; color: #dce4f4; font: 700 .72rem Arial, sans-serif; }
+.status-correction-modal label small { color: #9aa6bd; font-weight: 400; }
+.status-correction-modal textarea { min-height: 80px; resize: vertical; border: 1px solid #484c56; border-radius: 8px; padding: .7rem; color: #eef2ff; background: #121419; font: .76rem/1.4 Arial, sans-serif; }
+.status-correction-modal .status-correction-current, .status-correction-modal .status-correction-notice { margin: 0; color: #bac4d8; font: .74rem/1.45 Arial, sans-serif; }
+.status-correction-modal form > div { display: flex; justify-content: flex-end; gap: .5rem; }
+.status-correction-modal form > div button[type=submit] { border: 0; border-radius: 8px; padding: .7rem .9rem; color: #fff; background: #3569ee; font: 700 .72rem Arial, sans-serif; cursor: pointer; }
+.status-correction-modal form > div button[type=submit]:disabled { opacity: .5; cursor: not-allowed; }
+.status-history { display: grid; gap: .45rem; margin-top: 1.1rem; border-top: 1px solid #30333b; padding-top: .9rem; color: #dce4f4; font: .72rem Arial, sans-serif; }
+.status-history ul { display: grid; gap: .55rem; max-height: 180px; overflow-y: auto; margin: 0; padding: 0; list-style: none; }
+.status-history li { display: grid; gap: .15rem; border-left: 2px solid #3569ee; padding-left: .6rem; }
+.status-history li span, .status-history small { color: #9aa6bd; font-size: .66rem; }
+/* El modal genérico pone sus bloques en fila; el historial va en columna. */
+.admin-confirm-modal > .status-history { display: grid; justify-content: stretch; }
+.status-history li, .status-history li b { min-width: 0; overflow-wrap: anywhere; }

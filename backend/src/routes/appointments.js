@@ -11,6 +11,7 @@ import { localDateFilterBounds } from '../config/time.js';
 import { cancelAppointmentReminders, scheduleAppointmentReminders } from '../services/reminders.js';
 import { notify } from '../services/notifications.js';
 import { retryOnDeadlock } from '../middleware/retry-deadlock.js';
+import { ATTENDANCE_STATUSES, NOT_STARTED_MESSAGE, recordStatusChange } from '../services/appointment-status.js';
 
 // Aislado por tenant: toda cita se lee, crea o modifica dentro de la barbería
 // de la URL (tenantIdOf). Administrar significa ser OWNER/ADMIN de ESA barbería.
@@ -202,6 +203,8 @@ router.get('/admin', requireTenantAdmin, async (request, response, next) => {
       `SELECT a.id, a.client_id AS "clientId", a.barber_id AS "barberId", a.service_id AS "serviceId",
        a.starts_at AS "startsAt", a.ends_at AS "endsAt", a.status, a.cancellation_reason AS "cancellationReason", a.payment_reference AS "paymentReference", a.payment_proof_url AS "paymentProofUrl", a.payment_amount AS "paymentAmount",
        a.admin_notes AS "adminNotes", a.cancelled_at AS "cancelledAt", a.completed_at AS "completedAt", a.updated_by AS "updatedBy",
+       a.starts_at <= now() AS "hasStarted",
+       (SELECT c.reason FROM appointment_status_changes c WHERE c.tenant_id = a.tenant_id AND c.appointment_id = a.id AND c.kind = 'CORRECTION' ORDER BY c.created_at DESC, c.id DESC LIMIT 1) AS "correctionReason",
        s.name AS "serviceName", b.display_name AS "barberName",
        CONCAT(u.first_name, ' ', u.last_name) AS "clientName"
        FROM appointments a
@@ -380,10 +383,14 @@ router.patch('/:id/status', requireTenantAdmin, retryOnDeadlock(async (request, 
   try {
     await connection.beginTransaction();
     const [rows] = await connection.execute(
-      `SELECT client_id AS "clientId", status, payment_reference AS "paymentReference" FROM appointments WHERE id = ? AND tenant_id = ? AND status IN ('PENDING', 'CONFIRMED')`,
+      `SELECT client_id AS "clientId", status, payment_reference AS "paymentReference", starts_at <= now() AS "hasStarted" FROM appointments WHERE id = ? AND tenant_id = ? AND status IN ('PENDING', 'CONFIRMED') FOR UPDATE`,
       [id.data, tenantId]
     );
     if (!rows.length) { await connection.rollback(); return response.status(404).json({ message: 'Cita no encontrada o no actualizable' }); }
+    if (ATTENDANCE_STATUSES.includes(parsed.data.status) && !rows[0].hasStarted) {
+      await connection.rollback();
+      return response.status(409).json({ message: NOT_STARTED_MESSAGE });
+    }
     if (rows[0].status === 'PENDING' && rows[0].paymentReference && !['CONFIRMED', 'CANCELLED'].includes(parsed.data.status)) {
       await connection.rollback();
       return response.status(400).json({ message: 'Primero aprueba o rechaza el anticipo antes de cambiar esta cita.' });
@@ -391,6 +398,10 @@ router.patch('/:id/status', requireTenantAdmin, retryOnDeadlock(async (request, 
     const isPaymentDecision = rows[0].status === 'PENDING' && rows[0].paymentReference && ['CONFIRMED', 'CANCELLED'].includes(parsed.data.status);
     const groupCondition = isPaymentDecision ? 'payment_reference = ? AND status = \'PENDING\'' : 'id = ?';
     const groupValue = isPaymentDecision ? rows[0].paymentReference : id.data;
+    const [changedAppointments] = await connection.execute(
+      `SELECT id FROM appointments WHERE tenant_id = ? AND ${groupCondition}`,
+      [tenantId, groupValue]
+    );
     await connection.execute(
       `UPDATE appointments
        SET status = ?, cancellation_reason = ?,
@@ -418,6 +429,11 @@ router.patch('/:id/status', requireTenantAdmin, retryOnDeadlock(async (request, 
       );
       for (const appointment of affectedAppointments) await cancelAppointmentReminders(connection, appointment.id, tenantId);
     }
+    if (parsed.data.status !== rows[0].status) {
+      for (const appointment of changedAppointments) {
+        await recordStatusChange(connection, { tenantId, appointmentId: appointment.id, fromStatus: rows[0].status, toStatus: parsed.data.status, changedBy: request.auth.sub, reason: parsed.data.status === 'CANCELLED' ? parsed.data.reason ?? null : null });
+      }
+    }
     const messages = { COMPLETED: ['Cita atendida', 'Tu cita fue marcada como atendida'], NO_SHOW: ['Inasistencia registrada', 'Tu cita fue marcada como no asistida'], CANCELLED: ['Cita cancelada', 'Tu cita fue cancelada'] };
     if (parsed.data.status !== 'CONFIRMED') {
       await notify(connection, { tenantId, userId: rows[0].clientId, appointmentId: id.data, type: `APPOINTMENT_${parsed.data.status}`, title: messages[parsed.data.status][0], message: messages[parsed.data.status][1] });
@@ -426,6 +442,61 @@ router.patch('/:id/status', requireTenantAdmin, retryOnDeadlock(async (request, 
     return response.json({ message: 'Estado de cita actualizado' });
   } catch (error) { await connection.rollback(); return next(error); } finally { connection.release(); }
 }));
+
+// Corrección de un error humano: el dueño o administrador cambia una cita ya
+// marcada como Atendida o No asistió al otro estado, con motivo obligatorio.
+// Queda en el historial y se avisa al cliente.
+router.patch('/:id/correct-status', requireTenantAdmin, retryOnDeadlock(async (request, response, next) => {
+  const id = z.coerce.number().int().positive().safeParse(request.params.id);
+  const parsed = z.object({
+    status: z.enum(ATTENDANCE_STATUSES),
+    reason: z.string().trim().min(5, 'Escribe el motivo de la corrección (al menos 5 caracteres).').max(255)
+  }).safeParse(request.body);
+  if (!id.success || !parsed.success) {
+    return response.status(400).json({ message: 'Corrección inválida', errors: parsed.success ? undefined : parsed.error.flatten() });
+  }
+  const tenantId = tenantIdOf(request);
+  const connection = await pool.getConnection();
+  try {
+    await connection.beginTransaction();
+    const [rows] = await connection.execute(
+      `SELECT client_id AS "clientId", status FROM appointments WHERE id = ? AND tenant_id = ? AND status IN ('COMPLETED', 'NO_SHOW') FOR UPDATE`,
+      [id.data, tenantId]
+    );
+    if (!rows.length) { await connection.rollback(); return response.status(404).json({ message: 'Solo se pueden corregir citas marcadas como Atendida o No asistió.' }); }
+    if (rows[0].status === parsed.data.status) { await connection.rollback(); return response.status(409).json({ message: 'La cita ya tiene ese estado.' }); }
+    await connection.execute(
+      `UPDATE appointments SET status = ?, completed_at = CASE WHEN ? = 'COMPLETED' THEN now() ELSE NULL END, updated_by = ? WHERE id = ? AND tenant_id = ?`,
+      [parsed.data.status, parsed.data.status, request.auth.sub, id.data, tenantId]
+    );
+    await recordStatusChange(connection, { tenantId, appointmentId: id.data, fromStatus: rows[0].status, toStatus: parsed.data.status, changedBy: request.auth.sub, kind: 'CORRECTION', reason: parsed.data.reason });
+    await notify(connection, {
+      tenantId, userId: rows[0].clientId, appointmentId: id.data, type: 'APPOINTMENT_STATUS_CORRECTED', title: 'Corrección de tu cita',
+      message: parsed.data.status === 'COMPLETED'
+        ? 'Corregimos el estado de tu cita: quedó registrada como atendida. Ya puedes dejar tu reseña.'
+        : 'Corregimos el estado de tu cita: quedó registrada como no asistida.'
+    });
+    await connection.commit();
+    return response.json({ message: 'Estado corregido', status: parsed.data.status });
+  } catch (error) { await connection.rollback(); return next(error); } finally { connection.release(); }
+}));
+
+// Historial de estados de una cita (quién, cuándo, de qué a qué y por qué).
+router.get('/:id/status-history', requireTenantAdmin, async (request, response, next) => {
+  const id = z.coerce.number().int().positive().safeParse(request.params.id);
+  if (!id.success) return response.status(400).json({ message: 'Cita inválida' });
+  try {
+    const [history] = await pool.execute(
+      `SELECT c.id, c.from_status AS "fromStatus", c.to_status AS "toStatus", c.kind, c.reason, c.created_at AS "createdAt",
+              CONCAT(u.first_name, ' ', u.last_name) AS "changedByName"
+       FROM appointment_status_changes c LEFT JOIN users u ON u.id = c.changed_by
+       WHERE c.tenant_id = ? AND c.appointment_id = ?
+       ORDER BY c.created_at DESC, c.id DESC`,
+      [tenantIdOf(request), id.data]
+    );
+    return response.json({ history });
+  } catch (error) { return next(error); }
+});
 
 router.patch('/:id/admin-notes', requireTenantAdmin, async (request, response, next) => {
   const id = z.coerce.number().int().positive().safeParse(request.params.id);

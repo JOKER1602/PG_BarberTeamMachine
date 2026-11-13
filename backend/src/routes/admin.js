@@ -108,8 +108,9 @@ router.get('/dashboard', async (request, response, next) => {
   } catch (error) { return next(error); }
 });
 
-// Personas relacionadas con ESTA barbería: su personal (membresía) y los
-// clientes que reservaron en ella. Las cuentas son globales, pero una
+// Personas relacionadas con ESTA barbería: su personal (membresía) y sus
+// clientes (registrados o que iniciaron sesión desde su página, o que
+// reservaron en ella). Las cuentas son globales, pero una
 // barbería no ve a los clientes de otra.
 router.get('/users', async (request, response, next) => {
   const tenantId = tenantIdOf(request);
@@ -120,9 +121,11 @@ router.get('/users', async (request, response, next) => {
        (SELECT COUNT(*) FROM appointments a WHERE a.tenant_id = ? AND a.client_id = u.id) AS "appointmentCount"
        FROM users u JOIN roles r ON r.id = u.role_id
        LEFT JOIN tenant_memberships m ON m.user_id = u.id AND m.tenant_id = ?
-       WHERE m.user_id IS NOT NULL OR EXISTS (SELECT 1 FROM appointments a WHERE a.tenant_id = ? AND a.client_id = u.id)
+       WHERE m.user_id IS NOT NULL
+          OR EXISTS (SELECT 1 FROM tenant_clients tc WHERE tc.tenant_id = ? AND tc.user_id = u.id)
+          OR EXISTS (SELECT 1 FROM appointments a WHERE a.tenant_id = ? AND a.client_id = u.id)
        ORDER BY u.created_at DESC`,
-      [tenantId, tenantId, tenantId]
+      [tenantId, tenantId, tenantId, tenantId]
     );
     return response.json({ users: rows });
   } catch (error) { return next(error); }

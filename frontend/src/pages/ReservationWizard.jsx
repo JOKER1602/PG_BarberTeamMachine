@@ -2,9 +2,12 @@ import { useEffect, useState } from 'react';
 import { api, clearSession, getStoredSession, saveSession } from '../api.js';
 import { brandWords, passwordRecoveryHref, tenantBrand, tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
+import { bolivianPhonePattern, cleanBolivianPhone } from '../phone.js';
 
 const emailPattern = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const namePattern = /^[\p{L}]+(?:[ '\-][\p{L}]+)*$/u;
+// Celular boliviano: el servidor lo exige al crear la cuenta.
+const phonePattern = bolivianPhonePattern;
 
 function cleanName(value) {
   return value.replace(/[^\p{L}\s'-]/gu, '').replace(/\s+/g, ' ').replace(/^\s/, '');
@@ -57,7 +60,7 @@ export default function ReservationWizard() {
   const [slots, setSlots] = useState([]);
   const [selectedSlot, setSelectedSlot] = useState(suggestedSlotStart ? { startsAt: suggestedSlotStart } : null);
   const [authMode, setAuthMode] = useState('login');
-  const [authForm, setAuthForm] = useState({ email: '', password: '', firstName: '', lastName: '' });
+  const [authForm, setAuthForm] = useState({ email: '', password: '', firstName: '', lastName: '', phone: '' });
   const [showAuthPassword, setShowAuthPassword] = useState(false);
   const [authSubmitted, setAuthSubmitted] = useState(false);
   const [notice, setNotice] = useState('');
@@ -108,6 +111,7 @@ export default function ReservationWizard() {
     email: emailPattern.test(authForm.email),
     firstName: namePattern.test(authForm.firstName.trim()),
     lastName: namePattern.test(authForm.lastName.trim()),
+    phone: phonePattern.test(authForm.phone),
     passwordLength: authForm.password.length >= 8,
     passwordLower: /[a-z]/.test(authForm.password),
     passwordUpper: /[A-Z]/.test(authForm.password),
@@ -116,7 +120,7 @@ export default function ReservationWizard() {
   const newPasswordIsValid = authChecks.passwordLength && authChecks.passwordLower && authChecks.passwordUpper && authChecks.passwordNumber;
   const authIsValid = authMode === 'login'
     ? authChecks.email && Boolean(authForm.password)
-    : authChecks.email && authChecks.firstName && authChecks.lastName && newPasswordIsValid;
+    : authChecks.email && authChecks.firstName && authChecks.lastName && authChecks.phone && newPasswordIsValid;
   const bookingDates = Array.from({ length: 14 }, (_, index) => {
     const value = new Date();
     value.setDate(value.getDate() + index);
@@ -191,7 +195,9 @@ export default function ReservationWizard() {
     }
     setError('');
     try {
-      const result = authMode === 'login' ? await api.login(authForm) : await api.register(authForm);
+      const result = authMode === 'login'
+        ? await api.login({ email: authForm.email, password: authForm.password })
+        : await api.register(authForm);
       saveSession(result);
       setSession(result.user);
       if (directAccountAccess) {
@@ -450,7 +456,7 @@ export default function ReservationWizard() {
         <h1>Inicia sesión o regístrate para reservar</h1>
         <p>Para continuar, verificaremos que eres tú.</p>
         <form className="reservation-auth-form" noValidate onSubmit={authenticate}>
-          {authMode === 'register' && <><ReservationAuthField label="Nombre" status={fieldStatus(authForm.firstName, authChecks.firstName)} helper={authForm.firstName && !authChecks.firstName ? 'Usa solo letras.' : ''}><input type="text" required autoComplete="given-name" value={authForm.firstName} onChange={(event) => { setAuthForm({ ...authForm, firstName: cleanName(event.target.value) }); setError(''); }}/></ReservationAuthField><ReservationAuthField label="Apellido" status={fieldStatus(authForm.lastName, authChecks.lastName)} helper={authForm.lastName && !authChecks.lastName ? 'Usa solo letras.' : ''}><input type="text" required autoComplete="family-name" value={authForm.lastName} onChange={(event) => { setAuthForm({ ...authForm, lastName: cleanName(event.target.value) }); setError(''); }}/></ReservationAuthField></>}
+          {authMode === 'register' && <><ReservationAuthField label="Nombre" status={fieldStatus(authForm.firstName, authChecks.firstName)} helper={authForm.firstName && !authChecks.firstName ? 'Usa solo letras.' : ''}><input type="text" required autoComplete="given-name" value={authForm.firstName} onChange={(event) => { setAuthForm({ ...authForm, firstName: cleanName(event.target.value) }); setError(''); }}/></ReservationAuthField><ReservationAuthField label="Apellido" status={fieldStatus(authForm.lastName, authChecks.lastName)} helper={authForm.lastName && !authChecks.lastName ? 'Usa solo letras.' : ''}><input type="text" required autoComplete="family-name" value={authForm.lastName} onChange={(event) => { setAuthForm({ ...authForm, lastName: cleanName(event.target.value) }); setError(''); }}/></ReservationAuthField><ReservationAuthField label="Celular" status={fieldStatus(authForm.phone, authChecks.phone)} helper={authForm.phone && !authChecks.phone ? 'Celular boliviano de 8 dígitos que empiece con 6 o 7.' : 'Para avisarte sobre tu reserva.'}><input type="tel" required inputMode="numeric" autoComplete="tel" placeholder="Ej.: 71234567" value={authForm.phone} onChange={(event) => { setAuthForm({ ...authForm, phone: cleanBolivianPhone(event.target.value) }); setError(''); }}/></ReservationAuthField></>}
           <ReservationAuthField label="Correo electrónico" status={authSubmitted && !authForm.email ? 'invalid' : fieldStatus(authForm.email, authChecks.email)} helper={authSubmitted && !authForm.email ? 'Ingresa tu correo electrónico.' : authForm.email && !authForm.email.includes('@') ? 'Falta el símbolo @ en tu correo.' : authForm.email && !authChecks.email ? 'Ingresa un correo válido.' : ''}><input type="email" required autoComplete="email" placeholder="usuario@ejemplo.com" value={authForm.email} onChange={(event) => { setAuthForm({ ...authForm, email: event.target.value.replace(/\s/g, '') }); setError(''); }}/></ReservationAuthField>
           <ReservationAuthField label="Contraseña" status={authMode === 'login' ? (authSubmitted && !authForm.password ? 'invalid' : 'neutral') : fieldStatus(authForm.password, newPasswordIsValid)} helper={authMode === 'login' ? (authSubmitted && !authForm.password ? 'Ingresa tu contraseña.' : '') : 'Usa mayúscula, minúscula, número y 8 caracteres o más.'} action={<button className="wizard-password-toggle" type="button" onClick={() => setShowAuthPassword((visible) => !visible)} aria-label={showAuthPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'} title={showAuthPassword ? 'Ocultar contraseña' : 'Mostrar contraseña'}><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M2.5 12s3.4-5.5 9.5-5.5S21.5 12 21.5 12s-3.4 5.5-9.5 5.5S2.5 12 2.5 12Z"/><circle cx="12" cy="12" r="2.6"/>{showAuthPassword && <path d="M4 4l16 16"/>}</svg></button>}><input type={showAuthPassword ? 'text' : 'password'} required autoComplete={authMode === 'login' ? 'current-password' : 'new-password'} value={authForm.password} onChange={(event) => { setAuthForm({ ...authForm, password: event.target.value }); setError(''); }}/></ReservationAuthField>
           {authMode === 'register' && <ul className="password-checklist" aria-label="Requisitos de contraseña"><li className={authChecks.passwordLength ? 'valid' : ''}>8 caracteres o más</li><li className={authChecks.passwordUpper ? 'valid' : ''}>Una mayúscula</li><li className={authChecks.passwordLower ? 'valid' : ''}>Una minúscula</li><li className={authChecks.passwordNumber ? 'valid' : ''}>Un número</li></ul>}
@@ -468,7 +474,7 @@ export default function ReservationWizard() {
         <h1>Añadir teléfono</h1>
         <p>Introduce tu número de teléfono para confirmar la cita.</p>
         <form onSubmit={savePhone}>
-          <label>Número de teléfono<div className="phone-field"><span>+591</span><input type="tel" inputMode="numeric" minLength="8" maxLength="12" required autoFocus value={phoneInput} onChange={(event) => { setPhoneInput(event.target.value.replace(/[^0-9]/g, '')); setWhatsappConsent(false); }}/></div></label>
+          <label>Número de teléfono<div className="phone-field"><span>+591</span><input type="tel" inputMode="numeric" minLength="8" required autoFocus value={phoneInput} onChange={(event) => { setPhoneInput(cleanBolivianPhone(event.target.value)); }}/></div></label>
           <button className="wizard-primary">Continuar</button>
         </form>
       </section>

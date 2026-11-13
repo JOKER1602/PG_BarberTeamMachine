@@ -41,7 +41,10 @@ async function request(path, options = {}) {
   const data = response.status === 204 ? null : await response.json();
   if (!response.ok) {
     if (response.status === 401) expireStoredSession(path);
-    throw new Error(data?.message ?? 'No se pudo completar la solicitud');
+    // Si la API indica qué campo falló, se muestra ese motivo en vez de un
+    // genérico "datos inválidos".
+    const fieldError = Object.values(data?.errors?.fieldErrors ?? {}).flat()[0];
+    throw new Error(fieldError ? `${data.message}: ${fieldError}` : (data?.message ?? 'No se pudo completar la solicitud'));
   }
   return data;
 }
@@ -74,14 +77,16 @@ export const api = {
   barberDashboard: () => request('/barber/dashboard'),
   completeBarberAppointment: (id) => request(`/barber/appointments/${id}/complete`, { method: 'PATCH' }),
   updateBarberAppointmentStatus: (id, body) => request(`/barber/appointments/${id}/status`, { method: 'PATCH', body: JSON.stringify(body) }),
+  undoBarberAppointment: (id) => request(`/barber/appointments/${id}/undo`, { method: 'PATCH' }),
   availability: (barberId, serviceIds, date) => request(`/appointments/availability?barberId=${barberId}&serviceIds=${Array.isArray(serviceIds) ? serviceIds.join(',') : serviceIds}&date=${date}`),
   recommendations: (serviceIds = [], days = 14) => {
     const query = new URLSearchParams({ days: String(days) });
     if (serviceIds.length) query.set('serviceIds', serviceIds.join(','));
     return request(`/recommendations?${query.toString()}`);
   },
-  register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }).then(withSessionRole),
-  login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }).then(withSessionRole),
+  // tenantSlug: la API registra a los clientes como clientes de esta barbería.
+  register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify({ ...body, tenantSlug: currentTenantSlug() || undefined }) }).then(withSessionRole),
+  login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify({ ...body, tenantSlug: currentTenantSlug() || undefined }) }).then(withSessionRole),
   me: () => request('/auth/me').then(withSessionRole),
   logout: () => request('/auth/logout', { method: 'POST' }),
   // La barbería de origen da la marca del correo y el enlace de vuelta.
@@ -96,6 +101,8 @@ export const api = {
   adminAppointments: (query = '') => request(`/appointments/admin${query ? `?${query}` : ''}`),
   updateAppointmentAdminNotes: (id, adminNotes) => request(`/appointments/${id}/admin-notes`, { method: 'PATCH', body: JSON.stringify({ adminNotes }) }),
   updateAppointmentStatus: (id, body) => request(`/appointments/${id}/status`, { method: 'PATCH', body: JSON.stringify(body) }),
+  correctAppointmentStatus: (id, body) => request(`/appointments/${id}/correct-status`, { method: 'PATCH', body: JSON.stringify(body) }),
+  appointmentStatusHistory: (id) => request(`/appointments/${id}/status-history`),
   adminServices: () => request('/services/admin'),
   createService: (body) => request('/services', { method: 'POST', body: JSON.stringify(body) }),
   updateService: (id, body) => request(`/services/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
