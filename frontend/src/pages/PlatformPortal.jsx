@@ -1,11 +1,24 @@
 import { useEffect, useState } from 'react';
 import { api, clearSession } from '../api.js';
+import { DEFAULT_THEME } from '../tenant.js';
 
 // Panel de los operadores de la plataforma: alta de barberías y cambio de
 // estado. No muestra datos de clientes ni de citas de ninguna barbería.
 const statusLabels = { TRIAL: 'Prueba', ACTIVE: 'Activa', SUSPENDED: 'Suspendida', CANCELLED: 'Dada de baja' };
 const emptyOwnerForm = { slug: '', email: '', firstName: '', lastName: '', temporaryPassword: '' };
-const emptyForm = { displayName: '', slug: '', city: '', phone: '', address: '', status: 'TRIAL', ownerEmail: '', ownerFirstName: '', ownerLastName: '', ownerPassword: '' };
+const emptyForm = { displayName: '', slug: '', city: '', phone: '', address: '', status: 'TRIAL', ownerEmail: '', ownerFirstName: '', ownerLastName: '', ownerPassword: '', useTheme: false, theme: { ...DEFAULT_THEME } };
+const themeLabels = { accent: 'Acento (botones y enlaces)', background: 'Fondo', text: 'Texto' };
+
+// Selector de los tres colores de la barbería (acento, fondo y texto).
+function ThemeFields({ theme, onChange }) {
+  return <div className="platform-theme-fields">
+    {Object.entries(themeLabels).map(([key, label]) => <label key={key}>{label}
+      <span className="platform-color"><input type="color" value={theme[key]} onChange={(event) => onChange({ ...theme, [key]: event.target.value.toUpperCase() })}/>
+        <input value={theme[key]} pattern="#[0-9A-Fa-f]{6}" maxLength="7" title="Color en formato #RRGGBB" onChange={(event) => onChange({ ...theme, [key]: event.target.value.toUpperCase() })}/></span>
+    </label>)}
+    <p className="platform-theme-preview" style={{ background: theme.background, color: theme.text }}>Vista previa · <b style={{ color: theme.accent }}>Reservar cita</b> <span style={{ background: theme.accent, color: '#fff' }}>Botón</span></p>
+  </div>;
+}
 
 function slugify(value) {
   return value.normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80);
@@ -43,6 +56,7 @@ export default function PlatformPortal() {
   const [form, setForm] = useState(emptyForm);
   const [slugTouched, setSlugTouched] = useState(false);
   const [ownerForm, setOwnerForm] = useState(emptyOwnerForm);
+  const [themeForm, setThemeForm] = useState({ slug: '', theme: { ...DEFAULT_THEME } });
   const [message, setMessage] = useState('');
   const [error, setError] = useState('');
 
@@ -60,6 +74,7 @@ export default function PlatformPortal() {
     try {
       const result = await api.createTenant({
         slug: form.slug, displayName: form.displayName, status: form.status, city: form.city, phone: form.phone, address: form.address || undefined,
+        ...(form.useTheme ? { theme: form.theme } : {}),
         owner: { email: form.ownerEmail, firstName: form.ownerFirstName || undefined, lastName: form.ownerLastName || undefined, temporaryPassword: form.ownerPassword || undefined }
       });
       setMessage(`${result.tenant.displayName} creada en /t/${result.tenant.slug}. ${result.owner.accountCreated ? 'Se creó la cuenta del dueño: deberá cambiar la contraseña temporal al entrar.' : 'El dueño ya tenía cuenta y ahora administra la barbería.'}`);
@@ -78,6 +93,22 @@ export default function PlatformPortal() {
       });
       setMessage(`${result.owner.email} ahora es dueño de /t/${ownerForm.slug}.${result.owner.accountCreated ? ' Deberá cambiar la contraseña temporal al entrar.' : ''}`);
       setOwnerForm(emptyOwnerForm);
+      await reload();
+    } catch (requestError) { setError(requestError.message); }
+  }
+
+  // Colores propios de una barbería existente (o volver a los de por defecto).
+  function pickThemeTenant(slug) {
+    const tenant = tenants.find((item) => item.slug === slug);
+    setThemeForm({ slug, theme: { accent: tenant?.themeAccent ?? DEFAULT_THEME.accent, background: tenant?.themeBackground ?? DEFAULT_THEME.background, text: tenant?.themeText ?? DEFAULT_THEME.text } });
+  }
+  async function saveTheme(event, reset = false) {
+    event.preventDefault();
+    setError(''); setMessage('');
+    try {
+      await api.updateTenant(themeForm.slug, { theme: reset ? { accent: null, background: null, text: null } : themeForm.theme });
+      setMessage(reset ? `/t/${themeForm.slug} vuelve a los colores por defecto.` : `Colores guardados para /t/${themeForm.slug}.`);
+      if (reset) setThemeForm({ ...themeForm, theme: { ...DEFAULT_THEME } });
       await reload();
     } catch (requestError) { setError(requestError.message); }
   }
@@ -113,7 +144,7 @@ export default function PlatformPortal() {
       <div className="platform-table" role="table" aria-label="Barberías de la plataforma">
         <div className="platform-row platform-head" role="row"><span>Barbería</span><span>Dirección</span><span>Dueños</span><span>Barberos / citas</span><span>Estado</span><span>Acciones</span></div>
         {tenants.map((tenant) => <div className="platform-row" role="row" key={tenant.slug}>
-          <span><b>{tenant.displayName}</b><small>{tenant.city || '—'}</small></span>
+          <span><b>{tenant.displayName}</b><small>{tenant.city || '—'}</small>{tenant.themeAccent && <i className="platform-swatches" title="Colores propios">{[tenant.themeAccent, tenant.themeBackground, tenant.themeText].filter(Boolean).map((color) => <em key={color} style={{ background: color }}/>)}</i>}</span>
           <span><a href={`/t/${tenant.slug}`} target="_blank" rel="noreferrer">/t/{tenant.slug}</a></span>
           <span>{tenant.owners || 'Sin dueño'}</span>
           <span>{tenant.activeBarbers} / {tenant.appointments}</span>
@@ -143,7 +174,20 @@ export default function PlatformPortal() {
           <label>Apellido <small>Si es cuenta nueva</small><input value={form.ownerLastName} onChange={(event) => setForm({ ...form, ownerLastName: event.target.value })}/></label>
           <label>Contraseña temporal <small>Si es cuenta nueva</small><input type="password" autoComplete="new-password" minLength="8" value={form.ownerPassword} onChange={(event) => setForm({ ...form, ownerPassword: event.target.value })}/></label>
         </fieldset>
+        <fieldset className="platform-owner"><legend>Colores</legend>
+          <label className="admin-check"><input type="checkbox" checked={form.useTheme} onChange={(event) => setForm({ ...form, useTheme: event.target.checked })}/>Usar colores propios (si no, usa los colores por defecto)</label>
+          {form.useTheme && <ThemeFields theme={form.theme} onChange={(theme) => setForm({ ...form, theme })}/>}
+        </fieldset>
         <button>Crear barbería</button>
+      </form>
+    </section>
+    <section className="admin-card">
+      <h3>Colores de una barbería</h3>
+      <p>Los colores son fijos por barbería: solo los cambia un operador desde aquí.</p>
+      <form className="admin-form platform-form" onSubmit={saveTheme}>
+        <label>Barbería<select required value={themeForm.slug} onChange={(event) => pickThemeTenant(event.target.value)}><option value="">Selecciona…</option>{tenants.filter((tenant) => tenant.status !== 'CANCELLED').map((tenant) => <option key={tenant.slug} value={tenant.slug}>{tenant.displayName} (/t/{tenant.slug})</option>)}</select></label>
+        {themeForm.slug && <ThemeFields theme={themeForm.theme} onChange={(theme) => setThemeForm({ ...themeForm, theme })}/>}
+        <div className="platform-theme-actions"><button disabled={!themeForm.slug}>Guardar colores</button><button type="button" className="quiet" disabled={!themeForm.slug} onClick={(event) => saveTheme(event, true)}>Usar colores por defecto</button></div>
       </form>
     </section>
     <section className="admin-card">

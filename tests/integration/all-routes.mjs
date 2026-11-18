@@ -107,7 +107,19 @@ try {
   await call('PATCH', '/platform/tenants/rutas-dos', 200, { cookie: operator, body: { status: 'SUSPENDED', displayName: 'Rutas Dos S' } });
   await call('PATCH', '/platform/tenants/no-existe', 404, { cookie: operator, body: { status: 'ACTIVE' } });
   const owner = (await call('POST', '/auth/login', 200, { body: { email: 'dueno@rutas.test', password: PASS } })).cookie;
-  await call('GET', t, 200);
+  const defaultBrand = await call('GET', t, 200);
+  check('sin colores propios usa los de por defecto', Object.values(defaultBrand.data.brand.theme ?? {}).every((value) => value === null), JSON.stringify(defaultBrand.data.brand));
+
+  // Colores propios por barbería: los fija el operador al crear o editar.
+  await call('POST', '/platform/tenants', 201, { cookie: operator, body: { slug: 'rutas-color', displayName: 'Rutas Color', city: 'Potosí', phone: '74444444', status: 'ACTIVE', theme: { accent: '#b3261e', background: '#1C1C1C', text: '#EDE6D8' }, owner: { email: 'dueno@rutas.test' } } });
+  const themedBrand = await call('GET', '/t/rutas-color', 200);
+  check('la barbería entrega sus colores', JSON.stringify(themedBrand.data.brand.theme) === JSON.stringify({ accent: '#B3261E', background: '#1C1C1C', text: '#EDE6D8' }), JSON.stringify(themedBrand.data.brand.theme));
+  await call('POST', '/platform/tenants', 400, { cookie: operator, body: { slug: 'rutas-mal', displayName: 'Rutas Mal', city: 'Oruro', phone: '75555555', theme: { accent: 'rojo' }, owner: { email: 'dueno@rutas.test' } } });
+  await call('PATCH', '/platform/tenants/rutas-color', 200, { cookie: operator, body: { theme: { accent: '#0B6E4F' } } });
+  check('editar un color conserva los demás', JSON.stringify((await call('GET', '/t/rutas-color', 200)).data.brand.theme) === JSON.stringify({ accent: '#0B6E4F', background: '#1C1C1C', text: '#EDE6D8' }));
+  await call('PATCH', '/platform/tenants/rutas-color', 200, { cookie: operator, body: { theme: { accent: null, background: null, text: null } } });
+  check('se puede volver a los colores por defecto', Object.values((await call('GET', '/t/rutas-color', 200)).data.brand.theme).every((value) => value === null));
+  await call('PATCH', '/platform/tenants/rutas-color', 403, { cookie: owner, body: { theme: { accent: '#000000' } } });
 
   // --- Catálogo y configuración --------------------------------------------------
   const created = await call('POST', `${t}/services/categories`, 201, { cookie: owner, body: { name: 'Coloración', slug: 'coloracion', description: 'Tintes' } });

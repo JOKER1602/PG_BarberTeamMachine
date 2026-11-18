@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, getStoredSession, logoutToHome, saveSession } from '../api.js';
+import PlatformLink from '../components/PlatformLink.jsx';
 import { tenantBrand, tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
 import RequiredPasswordChange from '../components/RequiredPasswordChange.jsx';
@@ -332,7 +333,7 @@ export default function AdminPortal() {
   </main>;
 
   return <main className="admin-portal">
-    <header><a href={tenantHref('/')}><BrandMark/></a><div><span>Administrador: {session.firstName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
+    <header><a href={tenantHref('/')}><BrandMark/></a><div><PlatformLink user={session}/><span>Administrador: {session.firstName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
     <div className="admin-portal-heading"><p className="section-label">Panel de administración</p><h1>Gestión de {tenantBrand().name}</h1><p>Administra la agenda, los servicios, el equipo y los usuarios desde un solo lugar.</p></div>
     <AdminPanel services={services} barbers={barbers} categories={categories} reloadCatalog={reloadCatalog}/>
   </main>;

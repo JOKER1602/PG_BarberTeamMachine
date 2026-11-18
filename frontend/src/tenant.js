@@ -69,10 +69,35 @@ export function setTenantBrand({ tenant, brand } = {}) {
     name: brand?.name || tenant?.displayName || 'Barbería',
     city: brand?.city || '',
     logoUrl: brand?.logoUrl || null,
-    coverUrl: brand?.coverUrl || null
+    coverUrl: brand?.coverUrl || null,
+    theme: brand?.theme ?? null
   };
-  if (globalThis.document) globalThis.document.title = currentBrand.name;
+  if (globalThis.document) {
+    globalThis.document.title = currentBrand.name;
+    applyBrandTheme(currentBrand.theme, globalThis.document.documentElement);
+  }
   return currentBrand;
+}
+
+// Colores por defecto del diseño (Empyrean Studio). Una barbería con colores
+// propios reemplaza los que tenga definidos; el resto usa estos.
+export const DEFAULT_THEME = { accent: '#3569EE', background: '#171717', text: '#F8F3EC' };
+const HEX_COLOR = /^#[0-9a-fA-F]{6}$/;
+
+// Activa la capa de colores que genera brand-theme.js (data-brand-theme) solo
+// si la barbería tiene al menos un color propio válido; si no, la página queda
+// exactamente con el diseño original.
+export function applyBrandTheme(theme, root) {
+  if (!root) return false;
+  const colors = Object.fromEntries(Object.keys(DEFAULT_THEME).map((key) => [key, HEX_COLOR.test(theme?.[key] ?? '') ? theme[key] : null]));
+  const hasTheme = Object.values(colors).some(Boolean);
+  for (const key of Object.keys(DEFAULT_THEME)) {
+    if (hasTheme) root.style.setProperty(`--theme-${key}`, colors[key] ?? DEFAULT_THEME[key]);
+    else root.style.removeProperty(`--theme-${key}`);
+  }
+  if (hasTheme) root.setAttribute('data-brand-theme', '');
+  else root.removeAttribute('data-brand-theme');
+  return hasTheme;
 }
 
 export function tenantBrand() {

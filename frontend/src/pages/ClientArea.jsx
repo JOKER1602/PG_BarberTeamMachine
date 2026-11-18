@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, getStoredSession, logoutToHome, saveSession } from '../api.js';
+import PlatformLink from '../components/PlatformLink.jsx';
 import { brandInitials, tenantBrand, tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
 
@@ -230,7 +231,7 @@ export default function ClientArea() {
   const statusLabel = { PENDING: 'Anticipo en revisión', CONFIRMED: 'Confirmada', COMPLETED: 'Atendida', CANCELLED: 'Cancelada', NO_SHOW: 'No asistió' };
 
   return <main className="client-area">
-    <header className="client-header"><a href={tenantHref('/')}><BrandMark/></a><div><span>{session.firstName} {session.lastName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
+    <header className="client-header"><a href={tenantHref('/')}><BrandMark/></a><div><PlatformLink user={session}/><span>{session.firstName} {session.lastName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
     <div className="client-layout">
       <aside className="client-menu"><p>MI CUENTA</p><strong>{session.firstName} {session.lastName}</strong><button className={activeTab === 'perfil' ? 'active' : ''} onClick={() => changeTab('perfil')}>◉ &nbsp; Perfil</button><button className={activeTab === 'historial' ? 'active' : ''} onClick={() => changeTab('historial')}>◷ &nbsp; Historial</button></aside>
       <section className="client-content">
