@@ -27,6 +27,11 @@ const ownerSchema = z.object({
   temporaryPassword: securePassword.optional()
 });
 
+// Colores propios de la barbería (#RRGGBB). Vacíos o null = colores por defecto.
+const hexColor = z.string().trim().regex(/^#[0-9a-fA-F]{6}$/, 'Usa colores en formato #RRGGBB').transform((value) => value.toUpperCase()).nullable().optional();
+const themeSchema = z.object({ accent: hexColor, background: hexColor, text: hexColor });
+const THEME_COLUMNS = { accent: 'theme_accent', background: 'theme_background', text: 'theme_text' };
+
 const createTenantSchema = z.object({
   slug: slugSchema,
   displayName: z.string().trim().min(2).max(160),
@@ -36,13 +41,15 @@ const createTenantSchema = z.object({
   country: z.string().trim().min(2).max(120).default('Bolivia'),
   phone: z.string().trim().min(6).max(30),
   address: z.string().trim().max(255).optional(),
+  theme: themeSchema.optional(),
   owner: ownerSchema
 });
 
 const updateTenantSchema = z.object({
   status: z.enum(TENANT_STATUSES).optional(),
   displayName: z.string().trim().min(2).max(160).optional(),
-  legalName: z.string().trim().min(2).max(160).optional()
+  legalName: z.string().trim().min(2).max(160).optional(),
+  theme: themeSchema.optional()
 }).refine((value) => Object.keys(value).length > 0, 'Indica al menos un cambio');
 
 
@@ -80,7 +87,7 @@ router.get('/tenants', async (_request, response, next) => {
   try {
     const [rows] = await pool.execute(
       `SELECT t.slug, t.display_name AS "displayName", t.legal_name AS "legalName", t.status, t.created_at AS "createdAt",
-              ts.city,
+              ts.city, ts.theme_accent AS "themeAccent", ts.theme_background AS "themeBackground", ts.theme_text AS "themeText",
               (SELECT string_agg(u.email, ', ' ORDER BY u.email)
                  FROM tenant_memberships m JOIN users u ON u.id = m.user_id
                 WHERE m.tenant_id = t.id AND m.role = 'OWNER' AND m.is_active = TRUE) AS owners,
@@ -113,9 +120,10 @@ router.post('/tenants', async (request, response, next) => {
     // Configuración mínima: el dueño completa dirección, horario, QR y marca
     // desde su panel. El WhatsApp parte igual al teléfono.
     await connection.execute(
-      `INSERT INTO tenant_settings (tenant_id, business_name, address, city, country, phone, whatsapp, hours_text)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
-      [tenantId, data.displayName, data.address ?? '', data.city, data.country, data.phone, data.phone, 'Horario por confirmar']
+      `INSERT INTO tenant_settings (tenant_id, business_name, address, city, country, phone, whatsapp, hours_text, theme_accent, theme_background, theme_text)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [tenantId, data.displayName, data.address ?? '', data.city, data.country, data.phone, data.phone, 'Horario por confirmar',
+        data.theme?.accent ?? null, data.theme?.background ?? null, data.theme?.text ?? null]
     );
     for (const [name, slug, sortOrder] of DEFAULT_CATEGORIES) {
       await connection.execute('INSERT INTO service_categories (tenant_id, name, slug, sort_order) VALUES (?, ?, ?, ?)', [tenantId, name, slug, sortOrder]);
@@ -141,14 +149,29 @@ router.patch('/tenants/:slug', async (request, response, next) => {
   if (!slug.success) return response.status(404).json({ message: 'Barbería no encontrada' });
   if (!parsed.success) return invalid(response, parsed, 'Cambio inválido');
   const fields = { status: 'status', displayName: 'display_name', legalName: 'legal_name' };
-  const keys = Object.keys(parsed.data);
+  const keys = Object.keys(parsed.data).filter((key) => fields[key]);
+  const themeKeys = Object.keys(parsed.data.theme ?? {}).filter((key) => parsed.data.theme[key] !== undefined);
   try {
-    const [result] = await pool.execute(
-      `UPDATE tenants SET ${keys.map((key) => `${fields[key]} = ?`).join(', ')} WHERE slug = ?`,
-      [...keys.map((key) => parsed.data[key]), slug.data]
+    const [[found]] = await pool.execute('SELECT id FROM tenants WHERE slug = ?', [slug.data]);
+    if (!found) return response.status(404).json({ message: 'Barbería no encontrada' });
+    if (keys.length) {
+      await pool.execute(
+        `UPDATE tenants SET ${keys.map((key) => `${fields[key]} = ?`).join(', ')} WHERE id = ?`,
+        [...keys.map((key) => parsed.data[key]), found.id]
+      );
+    }
+    if (themeKeys.length) {
+      await pool.execute(
+        `UPDATE tenant_settings SET ${themeKeys.map((key) => `${THEME_COLUMNS[key]} = ?`).join(', ')}, updated_at = now() WHERE tenant_id = ?`,
+        [...themeKeys.map((key) => parsed.data.theme[key]), found.id]
+      );
+    }
+    const [[tenant]] = await pool.execute(
+      `SELECT t.slug, t.display_name AS "displayName", t.legal_name AS "legalName", t.status,
+              ts.theme_accent AS "themeAccent", ts.theme_background AS "themeBackground", ts.theme_text AS "themeText"
+       FROM tenants t LEFT JOIN tenant_settings ts ON ts.tenant_id = t.id WHERE t.id = ?`,
+      [found.id]
     );
-    if (!result.affectedRows) return response.status(404).json({ message: 'Barbería no encontrada' });
-    const [[tenant]] = await pool.execute('SELECT slug, display_name AS "displayName", legal_name AS "legalName", status FROM tenants WHERE slug = ?', [slug.data]);
     return response.json({ tenant, message: 'Barbería actualizada' });
   } catch (error) { return next(error); }
 });

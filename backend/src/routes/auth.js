@@ -191,7 +191,7 @@ router.patch('/me/password', requireAuth, changePasswordLimiter, async (request,
       return response.status(400).json({ message: 'La contrasena actual no es correcta' });
     }
     await pool.execute('UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?', [await bcrypt.hash(parsed.data.password, 12), request.auth.sub]);
-    return response.json({ message: 'Contrasena actualizada correctamente' });
+    return response.json({ message: 'Contraseña actualizada correctamente.' });
   } catch (error) { return next(error); }
 });
 
@@ -262,7 +262,7 @@ router.post('/reset-password', resetPasswordLimiter, async (request, response, n
     const passwordHash = await bcrypt.hash(parsed.data.password, 12);
     await pool.execute('UPDATE users SET password_hash = ?, must_change_password = FALSE WHERE id = ?', [passwordHash, rows[0].user_id]);
     await pool.execute('UPDATE password_reset_tokens SET used_at = now() WHERE token_hash = ?', [tokenHash]);
-    return response.json({ message: 'Contrasena actualizada correctamente' });
+    return response.json({ message: 'Contraseña actualizada correctamente.' });
   } catch (error) {
     return next(error);
   }

@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import { api, getStoredSession, logoutToHome } from '../api.js';
+import PlatformLink from '../components/PlatformLink.jsx';
 import { tenantHref } from '../tenant.js';
 import BrandMark from '../components/BrandMark.jsx';
 import RequiredPasswordChange from '../components/RequiredPasswordChange.jsx';
@@ -113,7 +114,7 @@ export default function BarberPortal() {
     } catch (requestError) { setError(requestError.message); }
   }
   return <main className="barber-portal">
-    <header><a href={tenantHref('/')}><BrandMark/></a><div><span>{dashboard?.barber.displayName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
+    <header><a href={tenantHref('/')}><BrandMark/></a><div><PlatformLink user={session}/><span>{dashboard?.barber.displayName}</span><button onClick={logoutToHome}>Cerrar sesión</button></div></header>
     <section className="barber-hero"><p className="section-label">Mi agenda</p><h1>Hola, {dashboard?.barber.displayName?.split(' ')[0]}.</h1><p>Estas son exclusivamente las citas asignadas a ti.</p><div><article><b>{today.length}</b><span>Citas de hoy</span></article><article><b>{upcoming.length}</b><span>Próximas citas</span></article><article><b>{dashboard?.services.length ?? 0}</b><span>Servicios asignados</span></article></div></section>
     {error && <p className="barber-error">{error}</p>}
     {notice && !error && <p className="barber-notice" role="status">{notice}<button type="button" aria-label="Cerrar aviso" onClick={() => setNotice('')}>×</button></p>}

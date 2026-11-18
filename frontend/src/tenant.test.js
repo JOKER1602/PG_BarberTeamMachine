@@ -110,12 +110,42 @@ describe('marca por barbería', () => {
     vi.stubGlobal('document', { title: '' });
     atPath('/t/barberia-norte');
     const brand = setTenantBrand({ tenant: { slug: 'barberia-norte', displayName: 'Norte S.R.L.' }, brand: { name: 'Barbería Norte', city: 'Cochabamba', logoUrl: null, coverUrl: null } });
-    expect(brand).toEqual({ slug: 'barberia-norte', name: 'Barbería Norte', city: 'Cochabamba', logoUrl: null, coverUrl: null });
+    expect(brand).toEqual({ slug: 'barberia-norte', name: 'Barbería Norte', city: 'Cochabamba', logoUrl: null, coverUrl: null, theme: null });
     expect(document.title).toBe('Barbería Norte');
     expect(tenantBrand().name).toBe('Barbería Norte');
     // Sin datos de marca se usa el nombre registrado de la barbería.
     expect(setTenantBrand({ tenant: { slug: 'x', displayName: 'Otra' } }).name).toBe('Otra');
     expect(setTenantBrand().name).not.toMatch(/empyrean/i);
+  });
+
+  it('activa los colores propios solo si la barbería los tiene', async () => {
+    const { applyBrandTheme, DEFAULT_THEME } = await import('./tenant.js');
+    const fakeRoot = () => {
+      const styles = new Map(); const attributes = new Map();
+      return {
+        styles, attributes,
+        style: { setProperty: (name, value) => styles.set(name, value), removeProperty: (name) => styles.delete(name) },
+        setAttribute: (name, value) => attributes.set(name, value), removeAttribute: (name) => attributes.delete(name)
+      };
+    };
+    const themed = fakeRoot();
+    expect(applyBrandTheme({ accent: '#B3261E', background: '#1C1C1C', text: '#EDE6D8' }, themed)).toBe(true);
+    expect(themed.attributes.has('data-brand-theme')).toBe(true);
+    expect(themed.styles.get('--theme-accent')).toBe('#B3261E');
+    expect(themed.styles.get('--theme-background')).toBe('#1C1C1C');
+    expect(themed.styles.get('--theme-text')).toBe('#EDE6D8');
+
+    // Un color faltante o inválido usa el de por defecto.
+    const partial = fakeRoot();
+    applyBrandTheme({ accent: '#B3261E', background: 'rojo', text: null }, partial);
+    expect(partial.styles.get('--theme-background')).toBe(DEFAULT_THEME.background);
+    expect(partial.styles.get('--theme-text')).toBe(DEFAULT_THEME.text);
+
+    // Sin colores propios la página queda con el diseño original.
+    expect(applyBrandTheme({ accent: null, background: null, text: null }, themed)).toBe(false);
+    expect(themed.attributes.has('data-brand-theme')).toBe(false);
+    expect(themed.styles.size).toBe(0);
+    expect(applyBrandTheme(null, fakeRoot())).toBe(false);
   });
 
   it('la recuperación de contraseña recuerda la barbería de origen', async () => {

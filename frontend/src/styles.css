@@ -944,3 +944,30 @@ html, body, #root { max-width: 100%; overflow-x: hidden; }
 /* El modal genérico pone sus bloques en fila; el historial va en columna. */
 .admin-confirm-modal > .status-history { display: grid; justify-content: stretch; }
 .status-history li, .status-history li b { min-width: 0; overflow-wrap: anywhere; }
+
+/* Portal de plataforma: colores propios por barbería. */
+.platform-theme-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: .65rem; }
+.platform-color { display: flex; align-items: center; gap: .45rem; }
+.platform-color input[type=color] { width: 42px !important; height: 36px; flex: 0 0 auto; padding: 2px !important; cursor: pointer; }
+.platform-theme-preview { grid-column: 1 / -1; margin: 0; border: 1px solid #343742; border-radius: 9px; padding: .8rem 1rem; font: .8rem Arial, sans-serif; }
+.platform-theme-preview span { margin-left: .5rem; border-radius: 6px; padding: .3rem .6rem; font-weight: 700; }
+.platform-theme-actions { display: flex; flex-wrap: wrap; gap: .5rem; }
+.platform-swatches { display: inline-flex; gap: 3px; margin-top: .3rem; }
+.platform-swatches em { display: inline-block; width: 14px; height: 14px; border: 1px solid #555a66; border-radius: 3px; }
+
+/* Atajo al panel de la plataforma (solo operadores del SaaS). */
+.platform-shortcut { display: inline-flex; align-items: center; gap: .4rem; border: 1px solid #3569ee; border-radius: 7px; padding: .45rem .75rem; color: #f8f3ec; font: 700 .72rem Arial, sans-serif; letter-spacing: .04em; text-decoration: none; white-space: nowrap; }
+.platform-shortcut::before { content: '⚙'; font-size: .9rem; line-height: 1; }
+.platform-shortcut:hover, .platform-shortcut:focus-visible { background: rgba(53, 105, 238, .18); }
+.home-nav-actions .platform-shortcut { margin-right: .6rem; }
+.home-mobile-menu .platform-shortcut { justify-content: flex-start; border-color: #3569ee; }
+/* Pantallas medianas: solo el ícono, para no tapar el menú. */
+@media (max-width: 1180px) {
+  .home-nav-actions .home-platform-link { padding: .45rem .6rem; font-size: 0; }
+}
+@media (max-width: 700px) {
+  .home-nav-actions .home-platform-link { display: none; }
+}
+
+/* Aviso de cierre automático tras cambiar la contraseña. */
+.recovery-closing { margin: .9rem 0 0; color: #aeb4c0; font: .85rem Arial, sans-serif; text-align: center; }

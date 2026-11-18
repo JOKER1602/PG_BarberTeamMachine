@@ -11,10 +11,11 @@ function fakeDb({ existingSlug = false, existingUser = null } = {}) {
   const execute = async (sql, values = []) => {
     calls.push({ sql, values });
     if (sql.includes('FROM tenants WHERE slug = ? FOR UPDATE')) return [existingSlug ? [{ id: 't' }] : []];
+    if (sql.includes('SELECT id FROM tenants WHERE slug = ?')) return [values[0] === 'no-existe' ? [] : [{ id: 'tenant-sur' }]];
     if (sql.includes('FROM users WHERE email = ? FOR UPDATE')) return [existingUser ? [existingUser] : []];
     if (/^\s*INSERT/i.test(sql)) return [{ insertId: 77, affectedRows: 1 }];
     if (/^\s*UPDATE/i.test(sql)) return [{ affectedRows: sql.includes('WHERE slug = ?') && values.at(-1) === 'no-existe' ? 0 : 1 }];
-    if (sql.includes('SELECT slug, display_name')) return [[{ slug: values[0], displayName: 'X', legalName: 'X', status: 'SUSPENDED' }]];
+    if (sql.includes('SELECT t.slug, t.display_name')) return [[{ slug: 'barberia-sur', displayName: 'X', legalName: 'X', status: 'SUSPENDED' }]];
     return [[]];
   };
   const connection = { execute, beginTransaction: async () => {}, commit: async () => { calls.push({ sql: 'COMMIT' }); }, rollback: async () => { calls.push({ sql: 'ROLLBACK' }); }, release() {} };
@@ -87,10 +88,24 @@ test('rechaza slug repetido, dueño nuevo incompleto, cuenta desactivada y datos
 test('cambia el estado de una barbería y valida el cambio', async () => {
   const suspended = await run('/tenants/:slug', 'patch', { params: { slug: 'barberia-sur' }, body: { status: 'SUSPENDED' } });
   assert.equal(suspended.status, 200);
-  assert.deepEqual(suspended.calls[0].values, ['SUSPENDED', 'barberia-sur']);
+  assert.deepEqual(suspended.calls.find((call) => /^\s*UPDATE tenants/.test(call.sql)).values, ['SUSPENDED', 'tenant-sur']);
   assert.equal((await run('/tenants/:slug', 'patch', { params: { slug: 'no-existe' }, body: { status: 'ACTIVE' } })).status, 404);
   assert.equal((await run('/tenants/:slug', 'patch', { params: { slug: 'barberia-sur' }, body: { status: 'BORRADA' } })).status, 400);
   assert.equal((await run('/tenants/:slug', 'patch', { params: { slug: 'barberia-sur' }, body: {} })).status, 400);
+});
+
+test('guarda los colores propios de una barbería y valida el formato', async () => {
+  const themed = await run('/tenants/:slug', 'patch', { params: { slug: 'barberia-sur' }, body: { theme: { accent: '#b3261e', text: null } } });
+  assert.equal(themed.status, 200);
+  const update = themed.calls.find((call) => /UPDATE tenant_settings/.test(call.sql));
+  assert.match(update.sql, /theme_accent = \?, theme_text = \?/);
+  assert.doesNotMatch(update.sql, /theme_background/);
+  assert.deepEqual(update.values, ['#B3261E', null, 'tenant-sur']);
+  assert.ok(!themed.calls.some((call) => /^\s*UPDATE tenants/.test(call.sql)), 'cambiar colores no toca la tabla tenants');
+  assert.equal((await run('/tenants/:slug', 'patch', { params: { slug: 'barberia-sur' }, body: { theme: { accent: 'rojo' } } })).status, 400);
+  const created = await run('/tenants', 'post', { body: { ...validTenant, theme: { accent: '#B3261E', background: '#1c1c1c', text: '#EDE6D8' } } });
+  assert.equal(created.status, 201);
+  assert.deepEqual(created.calls.find((call) => call.sql.includes('INSERT INTO tenant_settings')).values.slice(-3), ['#B3261E', '#1C1C1C', '#EDE6D8']);
 });
 
 test('asigna un dueño a una barbería existente sin duplicar la membresía', async () => {

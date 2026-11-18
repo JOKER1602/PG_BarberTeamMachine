@@ -104,13 +104,19 @@ app.get('/api/t/:tenantSlug', resolveTenant, async (request, response, next) => 
   try {
     const { id, slug, displayName } = request.tenant;
     const [rows] = await pool.execute(
-      'SELECT business_name AS "businessName", city, logo_url AS "logoUrl", cover_url AS "coverUrl" FROM tenant_settings WHERE tenant_id = ?',
+      `SELECT business_name AS "businessName", city, logo_url AS "logoUrl", cover_url AS "coverUrl",
+              theme_accent AS "themeAccent", theme_background AS "themeBackground", theme_text AS "themeText"
+       FROM tenant_settings WHERE tenant_id = ?`,
       [id]
     );
     const settings = rows[0] ?? {};
     return response.json({
       tenant: { slug, displayName },
-      brand: { name: settings.businessName || displayName, city: settings.city ?? null, logoUrl: settings.logoUrl ?? null, coverUrl: settings.coverUrl ?? null }
+      brand: {
+        name: settings.businessName || displayName, city: settings.city ?? null, logoUrl: settings.logoUrl ?? null, coverUrl: settings.coverUrl ?? null,
+        // Colores propios; null en todos = colores por defecto del diseño.
+        theme: { accent: settings.themeAccent ?? null, background: settings.themeBackground ?? null, text: settings.themeText ?? null }
+      }
     });
   } catch (error) { return next(error); }
 });
