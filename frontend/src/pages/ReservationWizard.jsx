@@ -1,6 +1,7 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { api, clearSession, getStoredSession, saveSession } from '../api.js';
 import { brandWords, passwordRecoveryHref, tenantBrand, tenantHref } from '../tenant.js';
+import { barbersForServices, firstAvailableDate, servicesWithoutProfessionals, WIZARD_STEPS, wizardStepLabel } from '../booking.js';
 import BrandMark from '../components/BrandMark.jsx';
 import { bolivianPhonePattern, cleanBolivianPhone } from '../phone.js';
 
@@ -76,6 +77,11 @@ export default function ReservationWizard() {
   const [submittingPayment, setSubmittingPayment] = useState(false);
   const [recommendations, setRecommendations] = useState({ serviceSuggestions: [], timeSuggestions: [], basedOnHistory: false });
   const [barberReviews, setBarberReviews] = useState({ summary: { total: 0, average: 0 }, reviews: [] });
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
+  // Horarios libres por día (fecha → cantidad); null mientras se consulta.
+  const [dayAvailability, setDayAvailability] = useState(null);
+  // La fecha la eligió la persona (o vino en el enlace): no se cambia sola.
+  const dateChosenRef = useRef(Boolean(reservationParams.get('date') || suggestedSlotStart));
   useAutoDismiss(notice, setNotice);
 
   useEffect(() => {
@@ -84,6 +90,7 @@ export default function ReservationWizard() {
         setServices(serviceResult.services);
         setBarbers(barberResult.barbers);
         setSettings(settingsResult.settings);
+        setCatalogLoaded(true);
       })
       .catch((requestError) => setError(requestError.message));
   }, []);
@@ -98,10 +105,11 @@ export default function ReservationWizard() {
   const depositAmount = totalPrice / 2;
   const remainingBalance = totalPrice - depositAmount;
   const totalDuration = selectedServices.reduce((total, service) => total + service.durationMinutes, 0);
-  const filteredBarbers = barbers.filter((barber) => {
-    const profile = `${barber.displayName} ${barber.services || ''}`.toLowerCase();
-    return selectedServices.every((service) => profile.includes(service.name.toLowerCase())) && profile.includes(professionalQuery.trim().toLowerCase());
-  });
+  const capableBarbers = barbersForServices(barbers, selectedServices);
+  const filteredBarbers = capableBarbers.filter((barber) => `${barber.displayName} ${barber.services || ''}`.toLowerCase().includes(professionalQuery.trim().toLowerCase()));
+  // Solo se marcan cuando el catálogo cargó (antes no hay profesionales).
+  const unavailableServiceIds = catalogLoaded ? servicesWithoutProfessionals(services, barbers) : new Set();
+  const noProfessionalForSelection = catalogLoaded && selectedServices.length > 0 && capableBarbers.length === 0;
   const visibleServices = services.filter((service) => {
     const categoryMatches = serviceFilter === 'all' || service.categorySlug === serviceFilter;
     return categoryMatches && service.name.toLowerCase().includes(serviceQuery.trim().toLowerCase());
@@ -168,8 +176,15 @@ export default function ReservationWizard() {
     }
   }
 
+  function chooseDate(date) {
+    dateChosenRef.current = true;
+    setSelectedSlot(null);
+    setSelection({ ...selection, date });
+  }
+
   function chooseProfessional(barberId) {
     setSelectedSlot(null);
+    setDayAvailability(null);
     setSelection({ ...selection, barberId: String(barberId), date: selection.date || bookingDates[0] });
     setShowProfessionalModal(false);
     setStep(2);
@@ -181,6 +196,7 @@ export default function ReservationWizard() {
   }
 
   function chooseSuggestedTime(suggestion) {
+    dateChosenRef.current = true;
     setSelectedSlot({ startsAt: suggestion.startsAt, endsAt: suggestion.endsAt });
     setSelection({ barberId: String(suggestion.barberId), date: new Date(suggestion.startsAt).toLocaleDateString('en-CA', { timeZone: 'America/La_Paz' }) });
     setStep(2);
@@ -309,6 +325,33 @@ export default function ReservationWizard() {
     if (step === 2 && selection.barberId && selection.date && selectedServiceIds.length) getSlots({ preserveSelection: Boolean(selectedSlot) });
   }, [step, selection.barberId, selection.date, selectedServiceIds.join(',')]);
 
+  // Días con horarios: apaga los cerrados o llenos y, si la fecha la puso el
+  // sistema (hoy) y no tiene horarios, salta al primer día disponible.
+  useEffect(() => {
+    if (step !== 2 || !selection.barberId || !selectedServiceIds.length) return undefined;
+    let current = true;
+    api.availableDays(selection.barberId, selectedServiceIds, bookingDates[0], bookingDates.length)
+      .then(({ days }) => {
+        if (!current) return;
+        setDayAvailability(Object.fromEntries(days.map((day) => [day.date, day.slots])));
+        const first = firstAvailableDate(days);
+        if (!dateChosenRef.current && first) {
+          setSelection((value) => (days.find((day) => day.date === value.date)?.slots ? value : { ...value, date: first }));
+        }
+      })
+      .catch(() => { if (current) setDayAvailability(null); });
+    return () => { current = false; };
+  }, [step, selection.barberId, selectedServiceIds.join(',')]);
+  const noDaysAvailable = dayAvailability && Object.values(dayAvailability).every((count) => count === 0);
+
+  // Botón fijo del celular: el mismo "Continuar" del resumen, siempre a mano.
+  const mobileAction = step === 1
+    ? { label: 'Continuar', disabled: !selectedServices.length || noProfessionalForSelection, onClick: () => setShowProfessionalModal(true), hint: selectedServices.length ? `${selectedServices.length} servicio(s) · ${totalDuration} min` : 'Elige un servicio' }
+    : step === 2
+      ? { label: rescheduleId ? 'Guardar nuevo horario' : 'Continuar', disabled: !selectedSlot, onClick: continueWithSelectedTime, hint: selectedSlot ? new Date(selectedSlot.startsAt).toLocaleString('es-BO', { weekday: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : 'Elige un horario' }
+      : null;
+  const modalOpen = showProfessionalModal || showAuthModal || showPhoneModal;
+
   useEffect(() => {
     if (step !== 2 || !selection.barberId || !selection.date || !selectedServiceIds.length) return undefined;
     const refreshAvailability = () => getSlots({ preserveSelection: true });
@@ -317,15 +360,20 @@ export default function ReservationWizard() {
     return () => { window.clearInterval(timer); window.removeEventListener('focus', refreshAvailability); };
   }, [step, selection.barberId, selection.date, selectedServiceIds.join(',')]);
 
-  return <main className="reservation-wizard">
+  return <main className={`reservation-wizard${mobileAction ? ' has-mobile-action' : ''}`}>
     {step !== 4 && <header className="wizard-header">
       <a href={tenantHref('/reservar')} aria-label="Volver a servicios" title="Volver a servicios"><svg aria-hidden="true" viewBox="0 0 24 24"><path d="M19 12H5M11 6l-6 6 6 6"/></svg></a>
       <a className="wizard-logo" href={tenantHref('/')}><BrandMark/></a>
       <nav className="wizard-steps" aria-label="Progreso de la reserva">
-        <span className={step >= 1 ? 'active' : ''}><b>1</b><em>Servicios</em></span><i aria-hidden="true"/>
-        <span className={step >= 2 ? 'active' : ''}><b>2</b><em>Detalles</em></span><i aria-hidden="true"/>
-        <span className={step >= 3 ? 'active' : ''}><b>3</b><em>Confirma</em></span>
+        <span className={step >= 1 ? 'active' : ''} aria-current={step === 1 ? 'step' : undefined}><b>1</b><em>Servicios</em></span><i aria-hidden="true"/>
+        <span className={step >= 2 ? 'active' : ''} aria-current={step === 2 ? 'step' : undefined}><b>2</b><em>Detalles</em></span><i aria-hidden="true"/>
+        <span className={step >= 3 ? 'active' : ''} aria-current={step === 3 ? 'step' : undefined}><b>3</b><em>Confirma</em></span>
       </nav>
+      {/* Celular: los tres pasos no caben; se muestra "Paso N de 3" con una barra. */}
+      <p className="wizard-steps-compact" aria-hidden="true">
+        <span>{wizardStepLabel(step)}</span>
+        <span className="wizard-steps-bar">{WIZARD_STEPS.map((name, index) => <i key={name} className={index < step ? 'done' : ''}/>)}</span>
+      </p>
     </header>}
     {error && <p className="wizard-notice error">{error}</p>}
     {notice && <p className="wizard-notice success wizard-feedback" role="status" aria-live="polite"><span aria-hidden="true">✓</span>{notice}</p>}
@@ -339,12 +387,16 @@ export default function ReservationWizard() {
           {serviceCategories.map((category) => <button key={category.slug} className={serviceFilter === category.slug ? 'active' : ''} onClick={() => setServiceFilter(category.slug)}>{category.name}</button>)}
         </div>
         <div className="wizard-service-list">
-          {visibleServices.length ? visibleServices.map((service) => <article className={selectedServiceIds.includes(String(service.id)) ? 'chosen' : ''} key={service.id}>
-            <div className="wizard-service-art">{service.name.slice(0, 1)}</div>
-            <div><h2>{service.name}</h2><p>{service.description || 'Servicio personalizado para cuidar tu estilo.'}</p><small>◷ &nbsp;{service.durationMinutes} min</small></div>
-            <strong>Bs {Number(service.price).toFixed(0)}</strong>
-            {selectedServiceIds.includes(String(service.id)) ? <button className="remove-service" onClick={() => toggleService(service.id)}>− Quitar</button> : <button className="add-service" onClick={() => toggleService(service.id)}>＋ Añadir</button>}
-          </article>) : <p className="empty-state">No hay servicios en esta categoría.</p>}
+          {visibleServices.length ? visibleServices.map((service) => {
+            const chosen = selectedServiceIds.includes(String(service.id));
+            const unavailable = unavailableServiceIds.has(String(service.id));
+            return <article className={[chosen && 'chosen', unavailable && 'unavailable'].filter(Boolean).join(' ')} key={service.id}>
+              <div className="wizard-service-art">{service.name.slice(0, 1)}</div>
+              <div><h2>{service.name}</h2><p>{service.description || 'Servicio personalizado para cuidar tu estilo.'}</p><small>◷ &nbsp;{service.durationMinutes} min</small>{unavailable && <em className="service-unavailable-note">Sin profesionales disponibles por ahora</em>}</div>
+              <strong>Bs {Number(service.price).toFixed(0)}</strong>
+              {chosen ? <button className="remove-service" onClick={() => toggleService(service.id)}>− Quitar</button> : <button className="add-service" disabled={unavailable} aria-label={unavailable ? `${service.name}: sin profesionales disponibles` : undefined} onClick={() => toggleService(service.id)}>＋ Añadir</button>}
+            </article>;
+          }) : <p className="empty-state">No hay servicios en esta categoría.</p>}
         </div>
         {session && recommendations.serviceSuggestions.length > 0 && <section className="recommendation-panel">
           <div><p className="section-label">Para ti</p><h2>Servicios recomendados</h2><span>{recommendations.basedOnHistory ? 'Basados en tus citas atendidas.' : 'Opciones populares mientras creas tu historial.'}</span></div>
@@ -355,7 +407,8 @@ export default function ReservationWizard() {
         <h2>Resumen</h2>
         {selectedServices.length ? <div className="summary-services">{selectedServices.map((service) => <div className="summary-service" key={service.id}><div className="wizard-service-art">{service.name.slice(0, 1)}</div><div><b>{service.name}</b><span>◷ &nbsp;{service.durationMinutes} min</span></div><strong>Bs {Number(service.price).toFixed(0)}</strong></div>)}</div> : <p>Elige uno o más servicios para continuar.</p>}
         <div className="summary-total"><span>Total · {totalDuration} min</span><b>Bs {totalPrice.toFixed(0)}</b></div>
-        <button className="wizard-primary" disabled={!selectedServices.length} onClick={() => setShowProfessionalModal(true)}>Continuar</button>
+        {noProfessionalForSelection && <p className="wizard-inline-warning" role="status">{selectedServices.length > 1 ? 'Ningún profesional realiza todos los servicios elegidos. Quita alguno para continuar.' : 'Este servicio no tiene profesionales disponibles por ahora. Elige otro servicio.'}</p>}
+        <button className="wizard-primary" disabled={!selectedServices.length || noProfessionalForSelection} onClick={() => setShowProfessionalModal(true)}>Continuar</button>
         <small>Todos los servicios se reservarán de forma consecutiva al elegir un horario.</small>
       </aside>
     </section>}
@@ -387,10 +440,12 @@ export default function ReservationWizard() {
           <div className="availability-section-heading"><span aria-hidden="true">▣</span><h2>Elige un día</h2></div>
           <div className="date-picker" role="group" aria-label="Selecciona una fecha">{bookingDates.map((date) => {
             const view = new Date(`${date}T12:00:00`);
-            return <button type="button" className={selection.date === date ? 'active' : ''} key={date} aria-pressed={selection.date === date} aria-label={view.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })} onClick={() => { setSelectedSlot(null); setSelection({ ...selection, date }); }}><small>{view.toLocaleDateString('es-BO', { weekday: 'short' })}</small><b>{view.getDate()}</b><span>{view.toLocaleDateString('es-BO', { month: 'short' })}</span></button>;
+            const closed = dayAvailability?.[date] === 0;
+            const label = view.toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' });
+            return <button type="button" className={[selection.date === date && 'active', closed && 'closed'].filter(Boolean).join(' ')} key={date} disabled={closed && selection.date !== date} aria-pressed={selection.date === date} aria-label={closed ? `${label}, sin horarios` : label} onClick={() => chooseDate(date)}><small>{view.toLocaleDateString('es-BO', { weekday: 'short' })}</small><b>{view.getDate()}</b><span>{view.toLocaleDateString('es-BO', { month: 'short' })}</span></button>;
           })}</div>
           <div className="availability-section-heading slot-heading"><span aria-hidden="true">◷</span><h2>Selecciona un horario</h2><p>{selection.date && new Date(`${selection.date}T12:00:00`).toLocaleDateString('es-BO', { weekday: 'long', day: 'numeric', month: 'long' })}</p></div>
-          <div className="wizard-slots">{slots.length ? slots.map((slot) => <button className={selectedSlot?.startsAt === slot.startsAt ? 'selected' : ''} key={slot.startsAt} onClick={() => setSelectedSlot(slot)}>{new Date(slot.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</button>) : <p className="empty-state">No hay horarios disponibles para este día. Elige otra fecha.</p>}</div>
+          <div className="wizard-slots">{slots.length ? slots.map((slot) => <button className={selectedSlot?.startsAt === slot.startsAt ? 'selected' : ''} aria-pressed={selectedSlot?.startsAt === slot.startsAt} key={slot.startsAt} onClick={() => setSelectedSlot(slot)}>{new Date(slot.startsAt).toLocaleTimeString('es-BO', { hour: '2-digit', minute: '2-digit' })}</button>) : <p className="empty-state">{noDaysAvailable ? 'Este profesional no tiene horarios libres en las próximas dos semanas. Prueba con otro profesional.' : 'No hay horarios disponibles para este día. Elige otra fecha.'}</p>}</div>
         </div>
         {session && recommendations.timeSuggestions.length > 0 && <section className="recommendation-panel time-recommendations">
           <div><p className="section-label">Disponibilidad inteligente</p><h2>Horarios sugeridos</h2><span>{recommendations.basedOnHistory ? 'Priorizados según tu historial y la agenda real.' : 'Las primeras opciones disponibles para tus servicios.'}</span></div>
@@ -430,6 +485,11 @@ export default function ReservationWizard() {
         <button className="checkout-primary" disabled={!settings?.paymentQrUrl || !paymentProofFile || submittingPayment} onClick={reserve}>{submittingPayment ? 'Enviando comprobante...' : 'Enviar anticipo y reservar'}</button>
       </aside>
     </section>}
+
+    {mobileAction && !modalOpen && <div className="wizard-mobile-action">
+      <span><b>Bs {totalPrice.toFixed(0)}</b><small>{mobileAction.hint}</small></span>
+      <button type="button" className="wizard-primary" disabled={mobileAction.disabled} onClick={mobileAction.onClick}>{mobileAction.label}</button>
+    </div>}
 
     {step === 4 && <section className="appointment-confirmed"><div><span>✓</span><h1>Cita confirmada</h1><p>Te esperamos en {tenantBrand().name}.</p><a href={tenantHref('/reservar')}>Volver a la barbería</a></div></section>}
 

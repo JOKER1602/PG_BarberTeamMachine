@@ -78,6 +78,7 @@ export const api = {
   completeBarberAppointment: (id) => request(`/barber/appointments/${id}/complete`, { method: 'PATCH' }),
   updateBarberAppointmentStatus: (id, body) => request(`/barber/appointments/${id}/status`, { method: 'PATCH', body: JSON.stringify(body) }),
   undoBarberAppointment: (id) => request(`/barber/appointments/${id}/undo`, { method: 'PATCH' }),
+  availableDays: (barberId, serviceIds, from, days = 14) => request(`/appointments/availability/days?barberId=${barberId}&serviceIds=${Array.isArray(serviceIds) ? serviceIds.join(',') : serviceIds}&from=${from}&days=${days}`),
   availability: (barberId, serviceIds, date) => request(`/appointments/availability?barberId=${barberId}&serviceIds=${Array.isArray(serviceIds) ? serviceIds.join(',') : serviceIds}&date=${date}`),
   recommendations: (serviceIds = [], days = 14) => {
     const query = new URLSearchParams({ days: String(days) });

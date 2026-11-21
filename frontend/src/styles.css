@@ -1022,3 +1022,61 @@ html, body, #root { max-width: 100%; overflow-x: hidden; }
 @media (max-width: 700px) {
   :root[data-brand-tone="light"] :is(.app-shell, .booking-page, .reservation-wizard, .client-area, .admin-portal, .barber-portal) { background-attachment: scroll, scroll; }
 }
+
+/* --- Flujo de reserva en celular (auditoría UI/UX) --------------------------- */
+/* Servicio sin profesionales: se ve, pero no se puede elegir. */
+:is(.wizard-service-list article.unavailable, .service-card.unavailable) :is(.service-art, .wizard-service-art, .service-card-price i) { opacity: .45; }
+.service-card.unavailable { cursor: not-allowed; }
+.service-unavailable-note { display: block; margin-top: .35rem; color: #f0b35a; font: 700 .75rem Arial, sans-serif; font-style: normal; }
+.add-service:disabled { cursor: not-allowed; opacity: .5; }
+.wizard-inline-warning { margin: 0 0 .8rem; border: 1px solid #8a5a1c; border-radius: 9px; padding: .65rem .75rem; color: #f6cf94; background: rgba(240, 179, 90, .1); font: 700 .8rem/1.4 Arial, sans-serif; }
+
+/* Día sin horarios (cerrado o lleno). */
+.date-picker button.closed { opacity: .38; cursor: not-allowed; text-decoration: line-through; }
+
+/* Indicador compacto de pasos y botón fijo: solo en celular. */
+.wizard-steps-compact, .wizard-mobile-action { display: none; }
+@media (max-width: 760px) {
+  .wizard-header { row-gap: .55rem; padding-block: .6rem; }
+  .wizard-steps-compact { display: grid; grid-column: 1 / -1; gap: .4rem; margin: 0; color: #d9dde6; font: 700 .8rem Arial, sans-serif; }
+  .wizard-steps-bar { display: grid; grid-template-columns: repeat(3, 1fr); gap: .3rem; }
+  .wizard-steps-bar i { height: 4px; border-radius: 4px; background: #3c4658; }
+  .wizard-steps-bar i.done { background: #3569ee; }
+  .reservation-wizard.has-mobile-action { padding-bottom: 6.5rem; }
+  .wizard-mobile-action { position: fixed; z-index: 40; inset: auto 0 0; display: flex; align-items: center; gap: .9rem; padding: .75rem 1.25rem calc(.75rem + env(safe-area-inset-bottom)); border-top: 1px solid #3a3a3a; color: #f8f3ec; background: rgba(23, 23, 23, .97); box-shadow: 0 -10px 30px rgba(0, 0, 0, .35); }
+  .wizard-mobile-action > span { display: grid; flex: 1; min-width: 0; gap: .1rem; }
+  .wizard-mobile-action b { font: 700 1.05rem Arial, sans-serif; }
+  .wizard-mobile-action small { overflow: hidden; color: #b9bcc4; font: .8rem Arial, sans-serif; text-overflow: ellipsis; white-space: nowrap; }
+  .wizard-mobile-action .wizard-primary { flex: 0 0 auto; width: auto; min-height: 48px; margin: 0; padding-inline: 1.6rem; font-size: .95rem; }
+  .wizard-mobile-action .wizard-primary:disabled { opacity: .45; }
+  /* 16 px evita que el iPhone acerque la pantalla al tocar un campo. */
+  input:not([type="checkbox"]):not([type="radio"]):not([type="file"]), select, textarea { font-size: 16px !important; }
+}
+
+/* Tema claro: ventanas de inicio de sesión y teléfono blancas y legibles. */
+:root[data-brand-tone="light"] .auth-modal { color: var(--theme-text) !important; background: #fff !important; }
+:root[data-brand-tone="light"] .auth-modal :is(h1, label, .registration-field > span:first-child) { color: var(--theme-text) !important; }
+:root[data-brand-tone="light"] .auth-modal :is(p, small, .section-label) { color: #55575c !important; }
+:root[data-brand-tone="light"] .auth-modal .reservation-auth-error { color: #b42318 !important; }
+:root[data-brand-tone="light"] .auth-modal :is(input, .phone-field span) { border-color: #c4c6cb !important; color: var(--theme-text) !important; background: #fff !important; }
+:root[data-brand-tone="light"] .auth-modal .modal-close { border-color: #d0d2d7 !important; color: var(--theme-text) !important; background: transparent !important; }
+:root[data-brand-tone="light"] .auth-modal .wizard-primary { color: #fff !important; background: var(--theme-text) !important; }
+:root[data-brand-tone="light"] .auth-modal .wizard-password-toggle { color: var(--theme-text) !important; background: transparent !important; }
+:root[data-brand-tone="light"] .auth-modal :is(.forgot-password-link, .text-button) { color: var(--theme-text) !important; text-decoration: underline !important; }
+
+/* Tema claro: día elegido, botón de cambiar profesional y reseñas. */
+:root[data-brand-tone="light"] .date-picker button.active { border-color: var(--theme-text) !important; color: #fff !important; background: var(--theme-text) !important; }
+:root[data-brand-tone="light"] .date-picker button.active :is(small, b, span) { color: #fff !important; }
+:root[data-brand-tone="light"] .professional-change i { color: inherit !important; }
+:root[data-brand-tone="light"] .professional-card-reviews { border-color: #d6d6d3 !important; background: #f4f4f2 !important; }
+:root[data-brand-tone="light"] .professional-card-reviews :is(b, span, p) { color: var(--theme-text) !important; }
+
+/* Tema claro: aviso de servicio no disponible, pasos y botón fijo. */
+:root[data-brand-tone="light"] .service-unavailable-note { color: #9a5b00 !important; }
+:root[data-brand-tone="light"] .wizard-inline-warning { border-color: #e2b46b !important; color: #7a4600 !important; background: #fff6e6 !important; }
+:root[data-brand-tone="light"] .wizard-steps-compact { color: #fff !important; }
+:root[data-brand-tone="light"] .wizard-steps-bar i { background: rgba(255, 255, 255, .22) !important; }
+:root[data-brand-tone="light"] .wizard-steps-bar i.done { background: #fff !important; }
+:root[data-brand-tone="light"] .wizard-mobile-action { border-top-color: #dcdcd9 !important; color: var(--theme-text) !important; background: rgba(255, 255, 255, .97) !important; box-shadow: 0 -10px 30px rgba(0, 0, 0, .1) !important; }
+:root[data-brand-tone="light"] .wizard-mobile-action small { color: #55575c !important; }
+:root[data-brand-tone="light"] .wizard-mobile-action .wizard-primary { color: #fff !important; background: var(--theme-text) !important; }

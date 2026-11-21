@@ -86,3 +86,19 @@ export async function findAvailableSlotsForDate(connection, { tenantId, barberId
   }
   return slots;
 }
+
+// Días con horarios libres a partir de `from` (YYYY-MM-DD), con las mismas
+// reglas que una reserva real. Sirve para que el asistente apague los días
+// cerrados o llenos y abra en el primero disponible.
+export async function findAvailableDays(connection, { tenantId, barberId, serviceIds, from, days }) {
+  const result = [];
+  const cursor = new Date(`${from}T12:00:00Z`);
+  for (let index = 0; index < days; index += 1) {
+    const date = cursor.toISOString().slice(0, 10);
+    const slots = await findAvailableSlotsForDate(connection, { tenantId, barberId, serviceIds, date });
+    if (!slots) return null;
+    result.push({ date, slots: slots.length });
+    cursor.setUTCDate(cursor.getUTCDate() + 1);
+  }
+  return result;
+}
