@@ -68,6 +68,7 @@ const routes = [
   ['barber', 'patch', '/appointments/:id/undo', { params: { id: '9' } }],
   ['barber', 'get', '/dashboard'],
   ['appointments', 'get', '/availability', { query: { barberId: '2', serviceIds: '1', date: '2030-03-13' } }],
+  ['appointments', 'get', '/availability/days', { query: { barberId: '2', serviceIds: '1', from: '2030-03-13', days: '3' } }],
   ['appointments', 'post', '/multi', { body: { barberId: 2, serviceIds: [1], startsAt: futureStart, paymentProofId: '11111111-1111-4111-8111-111111111111' } }],
   ['appointments', 'get', '/mine'],
   ['appointments', 'get', '/admin', { query: { status: 'PENDING' } }],

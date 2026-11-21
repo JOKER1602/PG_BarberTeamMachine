@@ -4,7 +4,7 @@ import { z } from 'zod';
 import pool from '../config/database.js';
 import { requireAuth, requireRole } from '../middleware/auth.js';
 import { TENANT_ADMIN_ROLES, isTenantAdmin, loadOptionalTenantMembership, requireTenantMembership, tenantIdOf } from '../middleware/tenant.js';
-import { findAvailableSlotsForDate, loadActiveAppointments, loadAvailability, loadMultiAvailability, sqlDateTime } from '../services/appointment-availability.js';
+import { findAvailableDays, findAvailableSlotsForDate, loadActiveAppointments, loadAvailability, loadMultiAvailability, sqlDateTime } from '../services/appointment-availability.js';
 import { BarberQueueTimeout, withBarberQueue } from '../services/barber-queue.js';
 import { isSlotAvailable } from '../domain/availability.js';
 import { localDateFilterBounds } from '../config/time.js';
@@ -64,6 +64,33 @@ router.get('/availability', async (request, response, next) => {
         return response.status(404).json({ message: 'El barbero no realiza todos los servicios seleccionados' });
       }
       return response.json({ slots });
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+const availableDaysSchema = z.object({
+  barberId: z.coerce.number().int().positive(),
+  serviceIds: z.string().regex(/^\d+(,\d+){0,9}$/),
+  from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
+  days: z.coerce.number().int().min(1).max(31).default(14)
+});
+
+// Cuántos horarios libres tiene cada día del rango (para apagar días cerrados).
+router.get('/availability/days', async (request, response, next) => {
+  const parsed = availableDaysSchema.safeParse(request.query);
+  if (!parsed.success) return response.status(400).json({ message: 'Parametros de disponibilidad invalidos' });
+  try {
+    const { barberId, from, days } = parsed.data;
+    const serviceIds = parsed.data.serviceIds.split(',').map(Number);
+    const connection = await pool.getConnection();
+    try {
+      const result = await findAvailableDays(connection, { tenantId: tenantIdOf(request), barberId, serviceIds, from, days });
+      if (!result) return response.status(404).json({ message: 'El barbero no realiza todos los servicios seleccionados' });
+      return response.json({ days: result });
     } finally {
       connection.release();
     }
