@@ -118,6 +118,29 @@ describe('marca por barbería', () => {
     expect(setTenantBrand().name).not.toMatch(/empyrean/i);
   });
 
+  it('pone el logo de la barbería como icono de la pestaña', async () => {
+    const { applyBrandIcon, brandIconHref } = await import('./tenant.js');
+    const makeLink = () => { const attrs = new Map(); return { attrs, setAttribute: (k, v) => attrs.set(k, v), removeAttribute: (k) => attrs.delete(k) }; };
+    const children = [];
+    const doc = {
+      head: { querySelector: () => children[0] ?? null, appendChild: (node) => children.push(node) },
+      createElement: () => makeLink()
+    };
+    const link = applyBrandIcon({ name: 'Esquece Barber', logoUrl: '/uploads/logo.webp' }, doc);
+    expect(children).toHaveLength(1);
+    expect(link.attrs.get('rel')).toBe('icon');
+    expect(link.attrs.get('href')).toBe('/uploads/logo.webp');
+    // Se reutiliza el mismo <link>; sin logo pasa a un monograma SVG.
+    applyBrandIcon({ name: 'Barbería Norte', logoUrl: null, theme: { background: '#EFEFED', text: '#0D0D0D' } }, doc);
+    expect(children).toHaveLength(1);
+    expect(link.attrs.get('type')).toBe('image/svg+xml');
+    const svg = decodeURIComponent(link.attrs.get('href').replace('data:image/svg+xml,', ''));
+    expect(svg).toContain('>BN</text>');
+    expect(svg).toContain('fill="#0D0D0D"');
+    // Un nombre con caracteres de marcado no rompe el SVG.
+    expect(decodeURIComponent(brandIconHref({ name: '<a> "b"' }))).not.toMatch(/<a>|"b"/);
+  });
+
   it('activa los colores propios solo si la barbería los tiene', async () => {
     const { applyBrandTheme, DEFAULT_THEME } = await import('./tenant.js');
     const fakeRoot = () => {
@@ -134,6 +157,12 @@ describe('marca por barbería', () => {
     expect(themed.styles.get('--theme-accent')).toBe('#B3261E');
     expect(themed.styles.get('--theme-background')).toBe('#1C1C1C');
     expect(themed.styles.get('--theme-text')).toBe('#EDE6D8');
+    expect(themed.styles.get('--theme-dir')).toBe('1'); // fondo oscuro
+    const light = fakeRoot();
+    applyBrandTheme({ accent: '#111111', background: '#FFFFFF', text: '#111111' }, light);
+    expect(light.styles.get('--theme-dir')).toBe('-1'); // fondo claro → tema claro
+    expect(light.attributes.get('data-brand-tone')).toBe('light'); // encabezado negro
+    expect(themed.attributes.has('data-brand-tone')).toBe(false);
 
     // Un color faltante o inválido usa el de por defecto.
     const partial = fakeRoot();
