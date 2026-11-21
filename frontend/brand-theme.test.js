@@ -14,7 +14,7 @@ describe('capa de colores por barbería', () => {
 
   it('los fondos oscuros y los textos claros siguen a la barbería', () => {
     expect(themedColor('#080807')).toBe('hsl(from var(--theme-background) h s l)');
-    expect(themedColor('#171717')).toBe('hsl(from var(--theme-background) h s calc(l + 6.1))');
+    expect(themedColor('#171717')).toBe('hsl(from var(--theme-background) h s calc(l + 6.1 * var(--theme-dir, 1)))');
     expect(themedColor('#f8f3ec')).toContain('var(--theme-text)');
     expect(themedColor('#aeb4c0')).toContain('var(--theme-text)');
   });
@@ -57,5 +57,34 @@ describe('texto sobre acento en reglas que solo cambian el fondo', () => {
     const css = await run('.a{background:#315fd5}.tint{background:rgba(53,105,238,.15);color:#fff}');
     expect(css).toMatch(/:where\(:root\[data-brand-theme\]\) \.a\{background:hsl\([^}]*;color:oklch\(from hsl\(from var\(--theme-accent\)[^}]*infinity/);
     expect(css).not.toMatch(/\.tint\{[^}]*infinity/);
+  });
+});
+
+describe('texto de acento sobre fondos claros', () => {
+  it('se oscurece para leerse aunque el acento sea claro, y no cambia en fondos oscuros', async () => {
+    const css = await run('.badge{color:#244eb9;background:#f0f3ff}.link{color:#244eb9;background:#171717}');
+    // Tema oscuro: ≤ 0.42 (fondo claro). Tema claro: ese fondo se invierte → ≥ 0.75.
+    expect(css).toMatch(/\.badge\{color:oklch\(from hsl\(from var\(--theme-accent\)[^}]*min\(l, 0\.42\)[^}]*max\(l, 0\.75\)/);
+    expect(css).not.toMatch(/\.link\{[^}]*min\(l/);
+  });
+});
+
+describe('texto sobre degradados de acento', () => {
+  it('elige negro o blanco según el tono medio del degradado', async () => {
+    const css = await run('.art{color:#e9efff;background:linear-gradient(145deg,#1b3b98,#4678fa)}');
+    expect(css).toMatch(/\.art\{color:oklch\(from color-mix\(in oklab, hsl\(from var\(--theme-accent\)[^,]*, hsl\(from var\(--theme-accent\)[^)]*\)+ calc\(\(0\.62 - l\) \* infinity\) 0 h\)/);
+  });
+});
+
+describe('tema claro (fondo claro elegido por la barbería)', () => {
+  it('invierte los desplazamientos de paneles y textos con --theme-dir', () => {
+    expect(themedColor('#343946')).toMatch(/calc\(l \+ [\d.]+ \* var\(--theme-dir, 1\)\)/);
+    expect(themedColor('#aeb4c0')).toMatch(/calc\(l - [\d.]+ \* var\(--theme-dir, 1\)\)/);
+  });
+
+  it('el texto blanco puro sigue al texto de la barbería (no queda blanco sobre blanco)', async () => {
+    const css = await run('.title{color:#fff}.cta{color:#fff;background:#3569ee}');
+    expect(css).toContain(':where(:root[data-brand-theme]) .title{color:hsl(from var(--theme-text) h s calc(l + 5.1 * var(--theme-dir, 1)))}');
+    expect(css).toMatch(/\.cta\{color:oklch\(from hsl\(from var\(--theme-accent\)[^}]*infinity/);
   });
 });

@@ -58,15 +58,25 @@ const round = (value) => Math.round(value * 10) / 10;
 // tonos conservan su relación con la base:
 //   acento        → proporcional (tintes claros y oscuros del mismo color)
 //   fondo y texto → desplazados (paneles unos puntos más claros que el fondo)
+// El diseño es oscuro. Si la barbería elige un fondo claro, tenant.js pone
+// --theme-dir: -1 y los desplazamientos se invierten: los paneles quedan unos
+// puntos más OSCUROS que el fondo y los textos secundarios más CLAROS que el
+// texto principal. Así la misma hoja sirve para un tema claro.
 const BASE_LIGHTNESS = { accent: 53.1, background: 2.9, text: 94.9 };
-const scaled = (role, lightness) => {
+const DIRECTION = 'var(--theme-dir, 1)';
+// Superficies (propiedades background): en el tema claro siguen yendo hacia el
+// blanco (tarjetas blancas sobre un fondo gris claro), mientras que bordes,
+// sombras y textos secundarios se oscurecen. --theme-surface-dir lo fija tenant.js.
+const SURFACE_DIRECTION = 'var(--theme-surface-dir, 1)';
+const scaled = (role, lightness, surface = false) => {
   if (role === 'accent') return `calc(l * ${Math.round((lightness / BASE_LIGHTNESS.accent) * 1000) / 1000})`;
   const offset = round(lightness - BASE_LIGHTNESS[role]);
-  return offset === 0 ? 'l' : `calc(l ${offset > 0 ? '+' : '-'} ${Math.abs(offset)})`;
+  const direction = surface && role === 'background' ? SURFACE_DIRECTION : DIRECTION;
+  return offset === 0 ? 'l' : `calc(l ${offset > 0 ? '+' : '-'} ${Math.abs(offset)} * ${direction})`;
 };
 
 // Devuelve el color de reemplazo o null si el color no se tematiza.
-export function themedColor(text) {
+export function themedColor(text, { surface = false } = {}) {
   const color = parseColor(text);
   const { h, chroma, l } = toHsl(color);
   const alpha = color.a < 1 ? ` / ${round(color.a * 100) / 100}` : '';
@@ -78,16 +88,16 @@ export function themedColor(text) {
   // fondo: con un acento rojo, teñirlos de rojo los haría parecer errores.
   if (isBlue && chroma >= 0.2 && l > 0.12 && l < 0.86) return `hsl(from var(--theme-accent) h s ${scaled('accent', lightness)}${alpha})`;
   if (chroma < 0.12 || (isBlue && chroma < 0.25)) {
-    if (l < 0.42) return `hsl(from var(--theme-background) h s ${scaled('background', lightness)}${alpha})`;
+    if (l < 0.42) return `hsl(from var(--theme-background) h s ${scaled('background', lightness, surface)}${alpha})`;
     return `hsl(from var(--theme-text) h calc(s * ${l >= 0.86 ? 1 : 0.5}) ${scaled('text', lightness)}${alpha})`;
   }
   return null; // dorados, verdes, rojos y otros colores con significado
 }
 
-export function themeValue(value) {
+export function themeValue(value, options) {
   let changed = false;
   const result = value.replace(COLOR, (match) => {
-    const replacement = themedColor(match);
+    const replacement = themedColor(match, options);
     if (!replacement) return match;
     changed = true;
     return replacement;
@@ -105,9 +115,32 @@ function accentBackgroundColor(value) {
   if (/var\(--btm-blue\)/.test(value)) return 'var(--theme-accent)';
   const first = value.match(COLOR)?.[0];
   if (!first || parseColor(first).a < 0.6) return null; // un tinte translúcido deja ver el fondo oscuro
-  const themed = themedColor(first);
-  return themed?.includes('--theme-accent') ? themed.replace(/ \/ [\d.]+\)$/, ')') : null;
+  const opaque = (color) => color?.includes('--theme-accent') ? color.replace(/ \/ [\d.]+\)$/, ')') : null;
+  const themed = opaque(themedColor(first));
+  if (!themed) return null;
+  // Degradado entre dos tonos de acento: el texto se decide por el tono medio,
+  // así se lee en todo el degradado (con un acento gris, de 50 % a 90 %).
+  const colors = value.match(COLOR) ?? [];
+  const last = colors.length > 1 && /gradient\(/i.test(value) ? opaque(themedColor(colors.at(-1))) : null;
+  return last ? `color-mix(in oklab, ${themed}, ${last})` : themed;
 }
+
+// ¿El fondo de la regla es claro (blanco o casi)? Ahí un texto de acento claro
+// (gris, dorado pálido) no se leería, así que se oscurece lo necesario.
+function hasLightBackground(value) {
+  if (/^\s*(?:white|#fff(?:fff)?)\b/i.test(value)) return true;
+  const first = value.match(COLOR)?.[0];
+  if (!first) return false;
+  const color = parseColor(first);
+  return color.a >= 0.6 && toHsl(color).l >= 0.8;
+}
+// Tema oscuro (dir 1): el fondo sigue claro → acento con luminosidad ≤ 0.42.
+// Tema claro (dir -1): ese fondo se invierte y queda oscuro → acento ≥ 0.75.
+const ACCENT_ON_LIGHT_SURFACE = `calc(min(l, 0.42) * (1 + ${DIRECTION}) / 2 + max(l, 0.75) * (1 - ${DIRECTION}) / 2)`;
+// Texto blanco puro: en el tema oscuro sigue siendo el más claro; en el claro
+// pasa a ser el más oscuro (si no, quedaría blanco sobre blanco).
+const PURE_WHITE = /^(?:#fff(?:fff)?|white|rgb\(\s*255\s*,\s*255\s*,\s*255\s*\))$/i;
+const WHITE_TEXT = `hsl(from var(--theme-text) h s calc(l + 5.1 * ${DIRECTION}))`;
 
 // Declaración nueva con el mismo formato que las de la regla.
 function postcssDecl(rule, value) {
@@ -139,6 +172,8 @@ export default function brandTheme() {
       const pending = [];
       root.walkRules((rule) => {
         if (insideKeyframes(rule)) return;
+        // Reglas escritas para el tema claro (encabezado negro): ya usan los colores finales.
+        if (/data-brand-tone/.test(rule.selector)) return;
         const declarations = [];
         // Texto sobre fondo de acento (botones): negro o blanco según la
         // luminosidad del fondo real de ESA regla (un dorado claro lleva texto
@@ -146,6 +181,7 @@ export default function brandTheme() {
         const accentBackground = rule.nodes.filter((node) => node.type === 'decl' && /^background(?:-color)?$/i.test(node.prop))
           .map((node) => accentBackgroundColor(node.value)).find(Boolean);
         const textOnAccent = accentBackground && `oklch(from ${accentBackground} calc((0.62 - l) * infinity) 0 h)`;
+        const lightBackground = !accentBackground && rule.nodes.some((node) => node.type === 'decl' && /^background(?:-color)?$/i.test(node.prop) && hasLightBackground(node.value));
         let hasColor = false;
         rule.each((node) => {
           if (node.type !== 'decl' || !THEMED_PROPERTIES.test(node.prop)) return;
@@ -154,7 +190,11 @@ export default function brandTheme() {
             declarations.push(node.clone({ value: textOnAccent }));
             return;
           }
-          const value = themeValue(node.value);
+          let value = themeValue(node.value, { surface: /^background/i.test(node.prop) });
+          if (value && lightBackground && node.prop.toLowerCase() === 'color' && value.includes('--theme-accent') && COLOR_ONLY.test(node.value.trim())) {
+            value = `oklch(from ${value} ${ACCENT_ON_LIGHT_SURFACE} c h)`;
+          }
+          if (!value && node.prop.toLowerCase() === 'color' && PURE_WHITE.test(node.value.trim())) value = WHITE_TEXT;
           if (value) declarations.push(node.clone({ value }));
         });
         // Si la regla solo cambia el fondo de acento (p. ej. de marino oscuro a

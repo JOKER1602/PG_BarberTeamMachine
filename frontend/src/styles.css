@@ -971,3 +971,54 @@ html, body, #root { max-width: 100%; overflow-x: hidden; }
 
 /* Aviso de cierre automático tras cambiar la contraseña. */
 .recovery-closing { margin: .9rem 0 0; color: #aeb4c0; font: .85rem Arial, sans-serif; text-align: center; }
+
+/* Tema claro (barbería con fondo claro, data-brand-tone="light" en <html>):
+   el encabezado queda negro con letras blancas para dar contraste. Usa el
+   color de texto de la barbería como negro. brand-theme.js no toca estas
+   reglas (ya están pensadas para el tema claro). */
+:root[data-brand-tone="light"] :is(.home-nav, .booking-page.booking-experience .booking-topbar, .reservation-wizard .wizard-header, .client-area .client-header, .admin-portal > header, .barber-portal > header) { border-bottom-color: rgba(255, 255, 255, .12) !important; background-color: var(--theme-text) !important; background-image: none !important; color: #fff; }
+:root[data-brand-tone="light"] :is(.home-nav, .booking-topbar, .wizard-header, .client-header, .admin-portal > header, .barber-portal > header) :is(a, span, em, strong, b) { color: #fff !important; }
+:root[data-brand-tone="light"] :is(.home-nav, .booking-topbar, .wizard-header, .client-header, .admin-portal > header, .barber-portal > header) :is(.brand-mark, .wizard-logo, a) > span { color: rgba(255, 255, 255, .62) !important; }
+:root[data-brand-tone="light"] .home-nav-links a { color: rgba(255, 255, 255, .78) !important; }
+:root[data-brand-tone="light"] .home-nav-links a:hover { color: #fff !important; }
+/* Botones del encabezado: blancos con texto negro. */
+:root[data-brand-tone="light"] :is(.booking-page.booking-experience .booking-login, .home-client-access, .reservation-wizard .wizard-header > a:first-child, .client-area .client-header button, .admin-portal > header button, .barber-portal > header button, .booking-page.booking-experience .booking-home-return, .home-mobile-menu-toggle) { border-color: #fff !important; background-color: #fff !important; background-image: none !important; box-shadow: none !important; }
+:root[data-brand-tone="light"] :is(.booking-page.booking-experience .booking-login, .home-client-access, .reservation-wizard .wizard-header > a:first-child, .client-area .client-header button, .admin-portal > header button, .barber-portal > header button, .booking-page.booking-experience .booking-home-return, .home-mobile-menu-toggle), :root[data-brand-tone="light"] :is(.booking-login, .home-client-access, .wizard-header > a:first-child, .booking-home-return) * { color: var(--theme-text) !important; }
+:root[data-brand-tone="light"] :is(.booking-login, .home-client-access, .wizard-header > a:first-child, .client-header button, .admin-portal > header button, .barber-portal > header button, .booking-home-return, .home-mobile-menu-toggle):hover { background-color: rgba(255, 255, 255, .86) !important; }
+:root[data-brand-tone="light"] :is(.home-nav, .client-header, .admin-portal > header, .barber-portal > header) .platform-shortcut { border-color: rgba(255, 255, 255, .7) !important; background: transparent !important; color: #fff !important; }
+/* Pasos del asistente dentro del encabezado. */
+:root[data-brand-tone="light"] .wizard-steps > span { color: rgba(255, 255, 255, .6) !important; }
+:root[data-brand-tone="light"] .wizard-steps > span > b { color: #fff !important; background: rgba(255, 255, 255, .14) !important; box-shadow: none !important; }
+:root[data-brand-tone="light"] .wizard-steps > span.active, :root[data-brand-tone="light"] .wizard-steps > span.active > em { color: #fff !important; }
+:root[data-brand-tone="light"] .wizard-steps > span.active > b { color: var(--theme-text) !important; background: #fff !important; }
+:root[data-brand-tone="light"] .wizard-steps > i { background: rgba(255, 255, 255, .22) !important; }
+/* Menú de celular que se despliega bajo el encabezado. */
+:root[data-brand-tone="light"] .home-mobile-menu { border-color: rgba(255, 255, 255, .12) !important; background: var(--theme-text) !important; }
+:root[data-brand-tone="light"] .home-mobile-menu a { color: #fff !important; }
+/* Panel del logo en "Nosotros": en el diseño oscuro es un panel claro y el logo
+   se mezcla con él (multiply). En el tema claro ese panel no debe invertirse a
+   oscuro, porque la mezcla haría desaparecer el logo. */
+:root[data-brand-tone="light"] .monogram-panel { border-bottom-color: var(--theme-text) !important; background: #fff !important; box-shadow: 0 10px 30px rgba(0, 0, 0, .08); }
+:root[data-brand-tone="light"] .monogram-panel p { color: var(--theme-text) !important; }
+
+/* Detalles del fondo en el tema claro: un patrón muy tenue de herramientas de
+   barbería (tijeras, navaja, peine y los rayos del logo) y un grano de papel,
+   para que el fondo no sea un blanco plano. */
+:root[data-brand-tone="light"] {
+  --brand-pattern: url("data:image/svg+xml,%3Csvg xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27 width%3D%27300%27 height%3D%27300%27 fill%3D%27none%27 stroke%3D%27black%27 stroke-opacity%3D%27.075%27 stroke-width%3D%271.6%27 stroke-linecap%3D%27round%27 stroke-linejoin%3D%27round%27%3E%3Cg transform%3D%27translate(48 62) rotate(-35)%27%3E%3Ccircle cx%3D%270%27 cy%3D%270%27 r%3D%278%27%2F%3E%3Ccircle cx%3D%270%27 cy%3D%2724%27 r%3D%278%27%2F%3E%3Cpath d%3D%27M7 4 58 20M7 20 58 4%27%2F%3E%3C%2Fg%3E%3Cg transform%3D%27translate(190 52) rotate(24)%27%3E%3Cpath d%3D%27M0 0h46l8 10H0z%27%2F%3E%3Cpath d%3D%27M0 5-34 11%27%2F%3E%3C%2Fg%3E%3Cg transform%3D%27translate(40 200) rotate(-12)%27%3E%3Cpath d%3D%27M0 0h70v10H0z%27%2F%3E%3Cpath d%3D%27M6 10v12M13 10v12M20 10v12M27 10v12M34 10v12M41 10v12M48 10v12M55 10v12M62 10v12%27%2F%3E%3C%2Fg%3E%3Cpath d%3D%27M226 168l-12 26h10l-6 24 18-31h-10l7-19z%27%2F%3E%3Cpath d%3D%27M150 140l-6 13h5l-3 12 9-15h-5l4-10z%27%2F%3E%3C%2Fsvg%3E");
+  --brand-grain: url("data:image/svg+xml,%3Csvg xmlns%3D%27http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%27 width%3D%27200%27 height%3D%27200%27%3E%3Cfilter id%3D%27g%27%3E%3CfeTurbulence type%3D%27fractalNoise%27 baseFrequency%3D%27.9%27 numOctaves%3D%272%27 stitchTiles%3D%27stitch%27%2F%3E%3CfeColorMatrix values%3D%270 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .09 0%27%2F%3E%3C%2Ffilter%3E%3Crect width%3D%27100%25%27 height%3D%27100%25%27 filter%3D%27url(%23g)%27%2F%3E%3C%2Fsvg%3E");
+}
+:root[data-brand-tone="light"] :is(.app-shell, .booking-page, .reservation-wizard, .client-area, .admin-portal, .barber-portal) {
+  background-image: var(--brand-pattern), var(--brand-grain) !important;
+  background-size: 300px 300px, 200px 200px !important;
+  background-attachment: fixed, fixed;
+}
+/* La portada y Nosotros reemplazan la cuadrícula original por el patrón, con
+   una luz suave para dar profundidad. */
+:root[data-brand-tone="light"] :is(.landing-hero, .manifesto-section, .booking-invite) {
+  background-image: radial-gradient(ellipse at 75% 20%, rgba(255, 255, 255, .7), transparent 55%), var(--brand-pattern), var(--brand-grain) !important;
+  background-size: auto, 300px 300px, 200px 200px !important;
+}
+@media (max-width: 700px) {
+  :root[data-brand-tone="light"] :is(.app-shell, .booking-page, .reservation-wizard, .client-area, .admin-portal, .barber-portal) { background-attachment: scroll, scroll; }
+}
